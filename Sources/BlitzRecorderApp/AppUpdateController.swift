@@ -6,7 +6,7 @@ import Sparkle
 
 @MainActor
 final class AppUpdateController: NSObject {
-    static let releaseNotesURL = URL(string: "https://github.com/blitzreels/blitzrecorder-public/releases/latest")!
+    static let releaseNotesURL = URL(string: "https://github.com/blitzreels/blitzrecorder/releases/latest")!
 
 #if DIRECT_DISTRIBUTION
     private var updaterController: SPUStandardUpdaterController?

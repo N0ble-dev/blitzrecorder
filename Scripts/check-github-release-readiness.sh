@@ -98,10 +98,20 @@ require_executable() {
 require_contains() {
   local file="$1"
   local text="$2"
-  if grep -Fq "$text" "$file"; then
+  if grep -Fq -- "$text" "$file"; then
     pass "$file contains $text"
   else
     fail "$file missing $text"
+  fi
+}
+
+reject_contains() {
+  local file="$1"
+  local text="$2"
+  if grep -Fq -- "$text" "$file"; then
+    fail "$file should not contain $text"
+  else
+    pass "$file does not contain $text"
   fi
 }
 
@@ -178,6 +188,12 @@ else
   fail "App Store Connect field export is stale"
 fi
 
+require_contains ".github/workflows/ci.yml" "pull_request:"
+require_contains ".github/workflows/ci.yml" "- main"
+require_contains ".github/workflows/macos-dmg.yml" "pull_request:"
+require_contains ".github/workflows/macos-dmg.yml" "- main"
+require_contains ".github/workflows/macos-dmg.yml" "tags:"
+require_contains ".github/workflows/macos-dmg.yml" "\"v*\""
 require_contains ".github/workflows/macos-dmg.yml" "APP_ARCHS: arm64 x86_64"
 require_contains ".github/workflows/macos-dmg.yml" "EXPECTED_ARCHS: arm64 x86_64"
 require_contains ".github/workflows/macos-dmg.yml" "SHA256SUMS"
@@ -189,11 +205,19 @@ require_contains ".github/workflows/macos-dmg.yml" "release-metadata.json"
 require_contains ".github/workflows/macos-dmg.yml" "build/ReleaseEvidence"
 require_contains ".github/workflows/macos-dmg.yml" "gh release create"
 require_contains ".github/workflows/ios-testflight.yml" "Scripts/ci-ios-testflight.sh"
+require_contains ".github/workflows/ios-testflight.yml" "workflow_dispatch:"
 require_contains ".github/workflows/ios-testflight.yml" "Validate iOS Submission Artifacts"
 require_contains ".github/workflows/ios-testflight.yml" "build/ReleaseEvidence/ios-testflight"
 require_contains ".github/workflows/app-store-release.yml" "Scripts/archive-app-store.sh"
+require_contains ".github/workflows/app-store-release.yml" "workflow_dispatch:"
 require_contains ".github/workflows/app-store-release.yml" "Validate App Store Submission Artifacts"
 require_contains ".github/workflows/app-store-release.yml" "build/ReleaseEvidence/app-store"
+private_branch_glob="$(printf '%s/%s' 'co''dex' '**')"
+reject_contains ".github/workflows/ci.yml" "$private_branch_glob"
+reject_contains ".github/workflows/macos-dmg.yml" "$private_branch_glob"
+reject_contains ".github/workflows/blitzrecorder-web.yml" "$private_branch_glob"
+reject_contains ".github/workflows/ios-testflight.yml" "$private_branch_glob"
+reject_contains ".github/workflows/app-store-release.yml" "$private_branch_glob"
 require_contains ".github/release.yml" "ignore-for-release"
 require_contains ".github/labels.json" "\"ignore-for-release\""
 require_contains "Scripts/package-dmg.sh" "macOS-\${DMG_ARCH_LABEL}"

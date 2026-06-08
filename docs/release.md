@@ -1,10 +1,12 @@
 # Release and CI
 
-GitHub Actions validates pull requests and pushes, builds downloadable DMGs, and provides manual App Store/TestFlight lanes.
+GitHub Actions validates pull requests and pushes to `main`, builds downloadable DMGs, and provides tag/manual release lanes.
+
+Public workflows should stay branch-neutral for contributors: use `pull_request` for feature branches, pushes to `main` for the protected branch, `v*` tags for direct-download releases, and `workflow_dispatch` for maintainer-only App Store/TestFlight work. Do not add personal or private branch globs to public workflows.
 
 ## Pull request and push CI
 
-`.github/workflows/ci.yml` runs on pull requests and pushes to `main` or `codex/**`.
+`.github/workflows/ci.yml` runs on pull requests and pushes to `main`.
 
 It runs:
 
@@ -18,11 +20,11 @@ This lane does not require Apple credentials.
 
 ## macOS DMG
 
-`.github/workflows/macos-dmg.yml` builds a downloadable DMG for pull requests, pushes, `v*` tags, and manual workflow runs.
+`.github/workflows/macos-dmg.yml` builds a downloadable DMG for pull requests, pushes to `main`, `v*` tags, and manual workflow runs.
 
-The normal artifact lane can run without Apple credentials on non-tag builds. It builds through `Scripts/ci-macos-dmg.sh`, packages the app through `Scripts/package-dmg.sh`, and uploads `build/Distributions/BlitzRecorder-*.dmg`.
+The normal artifact lane can run without Apple credentials on non-tag builds and uses read-only repository permissions. It builds through `Scripts/ci-macos-dmg.sh`, packages the app through `Scripts/package-dmg.sh`, and uploads `build/Distributions/BlitzRecorder-*.dmg`.
 
-Release builds are triggered by Git tags that start with `v`, for example `v0.1.0`. Tagged builds create a universal macOS DMG, sign and notarize it, generate `SHA256SUMS`, and attach both files to the GitHub Release.
+Release builds are triggered by Git tags that start with `v`, for example `v0.1.0`. Tagged builds create a universal macOS DMG, sign and notarize it, generate `SHA256SUMS`, generate a signed Sparkle appcast, and pass the artifacts to a separate tag-only publish job with GitHub Release write permission.
 
 Do not copy local or non-tag CI DMGs into `Web/blitzrecorder/public/downloads` for end users. The website download button falls back to GitHub Releases until `getLatestRelease()` finds a published `.dmg` asset, and `Scripts/check-github-release-readiness.sh` rejects static public DMGs unless `Scripts/validate-public-dmg.sh --require-notarized` passes.
 

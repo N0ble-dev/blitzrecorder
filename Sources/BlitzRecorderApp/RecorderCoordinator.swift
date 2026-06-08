@@ -1359,7 +1359,6 @@ final class RecorderCoordinator {
         }
 
         let ignoredTitleFragments = [
-            "CodexBarLifecycleKeepalive",
             "Display Backstop",
             "Item-0",
             "LifecycleKeepalive",

@@ -14,7 +14,7 @@ enum AppSupportActions {
         A screen, camera, and audio recorder for creators.
 
         Website: \(AppLinks.landingPage.absoluteString)
-        GitHub: https://github.com/blitzreels/blitzrecorder-public
+        GitHub: https://github.com/blitzreels/blitzrecorder
         License: AGPLv3.
 
         Includes Sparkle for direct-download app updates.
@@ -46,7 +46,7 @@ enum AppSupportActions {
     }
 
     static func reportIssue(diagnostics: String) {
-        var components = URLComponents(string: "https://github.com/blitzreels/blitzrecorder-public/issues/new")
+        var components = URLComponents(string: "https://github.com/blitzreels/blitzrecorder/issues/new")
         components?.queryItems = [
             URLQueryItem(name: "template", value: "bug_report.yml"),
             URLQueryItem(name: "title", value: "[Bug]: "),
@@ -59,7 +59,7 @@ Diagnostics:
 ```
 """)
         ]
-        open(components?.url ?? URL(string: "https://github.com/blitzreels/blitzrecorder-public/issues/new/choose")!)
+        open(components?.url ?? URL(string: "https://github.com/blitzreels/blitzrecorder/issues/new/choose")!)
     }
 
     static func sendFeedback(diagnostics: String) {

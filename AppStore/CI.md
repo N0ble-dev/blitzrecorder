@@ -1,5 +1,7 @@
 # BlitzRecorder CI Setup
 
+Public CI is intentionally branch-neutral: validate contributor work through `pull_request`, validate the protected branch through pushes to `main`, and keep maintainer release lanes on `v*` tags or manual dispatch. Do not add personal or private branch globs to public workflows.
+
 ## Pull Request CI
 
 `.github/workflows/ci.yml` runs unsigned checks on GitHub-hosted macOS runners:
@@ -54,9 +56,9 @@ Set `UPLOAD=1` from the workflow dispatch UI only when app records, free-access 
 
 ## macOS DMG CI
 
-`.github/workflows/macos-dmg.yml` builds a downloadable DMG for quick testing on every pull request, every push to `main` or `codex/**`, every `v*` tag, and manual `workflow_dispatch` runs.
+`.github/workflows/macos-dmg.yml` builds a downloadable DMG for quick testing on every pull request, every push to `main`, every `v*` tag, and manual `workflow_dispatch` runs.
 
-The normal artifact lane can run without Apple credentials on non-tag builds. It calls `Scripts/ci-macos-dmg.sh`, packages the app through `Scripts/package-dmg.sh`, and uploads `build/Distributions/BlitzRecorder-*.dmg` plus `SHA256SUMS` as the `blitzrecorder-macos-dmg` workflow artifact. When the workflow runs for a `v*` tag, it signs and notarizes the universal DMG, generates a signed Sparkle `appcast.xml`, then attaches the DMG, checksum file, and appcast to the matching GitHub Release.
+The normal artifact lane can run without Apple credentials on non-tag builds and uses read-only repository permissions. It calls `Scripts/ci-macos-dmg.sh`, packages the app through `Scripts/package-dmg.sh`, and uploads `build/Distributions/BlitzRecorder-*.dmg` plus `SHA256SUMS` as the `blitzrecorder-macos-dmg` workflow artifact. When the workflow runs for a `v*` tag, it signs and notarizes the universal DMG, generates a signed Sparkle `appcast.xml`, then a separate tag-only publish job attaches the DMG, checksum file, metadata, and appcast to the matching GitHub Release.
 
 For a signed and notarized manual DMG, configure these additional GitHub Actions secrets, then run the workflow manually with `notarize=1`:
 

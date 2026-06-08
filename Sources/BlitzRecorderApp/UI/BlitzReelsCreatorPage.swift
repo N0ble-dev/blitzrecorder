@@ -5,7 +5,7 @@ import SwiftUI
 struct BlitzReelsCreatorPage: View {
     @Bindable var access: AccessController
     @State private var licenseKey = ""
-    private let sourceCodeURL = URL(string: "https://github.com/blitzreels/blitzrecorder-public")!
+    private let sourceCodeURL = URL(string: "https://github.com/blitzreels/blitzrecorder")!
 
     var body: some View {
         ScrollView {

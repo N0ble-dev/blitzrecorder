@@ -12,8 +12,47 @@ enum ResizeAnchor {
 }
 
 enum SceneLayerResizing {
+    struct AspectRatioChange {
+        let frame: CGRect
+        let aspectRatio: CGFloat
+    }
+
     static let minimumSize: CGFloat = 0.08
     static let maximumSize: CGFloat = 4
+
+    static func settingAspectRatio(_ change: AspectRatioChange) -> CGRect {
+        guard change.aspectRatio > 0, change.frame.width > 0, change.frame.height > 0 else {
+            return clamped(change.frame)
+        }
+
+        let area = change.frame.width * change.frame.height
+        var width = sqrt(area * change.aspectRatio)
+        var height = width / change.aspectRatio
+
+        if width < minimumSize {
+            width = minimumSize
+            height = width / change.aspectRatio
+        }
+        if height < minimumSize {
+            height = minimumSize
+            width = height * change.aspectRatio
+        }
+        if width > maximumSize {
+            width = maximumSize
+            height = width / change.aspectRatio
+        }
+        if height > maximumSize {
+            height = maximumSize
+            width = height * change.aspectRatio
+        }
+
+        return clamped(CGRect(
+            x: change.frame.midX - width / 2,
+            y: change.frame.midY - height / 2,
+            width: width,
+            height: height
+        ))
+    }
 
     static func resized(_ frame: CGRect, delta: CGPoint, anchor: ResizeAnchor, aspectRatio: CGFloat? = nil) -> CGRect {
         if let aspectRatio, aspectRatio > 0 {
@@ -70,7 +109,18 @@ enum SceneLayerResizing {
         let heightScale = proposedSize.height / currentSize.height
         let scale: CGFloat
 
-        if anchor.resizesHorizontalEdgeOnly {
+        if anchor.keepsAspectRatio {
+            let horizontalDirection: CGFloat = anchor.resizesLeftEdge ? -1 : 1
+            let verticalDirection: CGFloat = anchor.resizesBottomEdge ? -1 : 1
+            let originalX = currentSize.width * horizontalDirection
+            let originalY = currentSize.height * verticalDirection
+            let movedX = originalX + delta.x
+            let movedY = originalY + delta.y
+            let magnitudeSquared = originalX * originalX + originalY * originalY
+            scale = magnitudeSquared > 0
+                ? (movedX * originalX + movedY * originalY) / magnitudeSquared
+                : 1
+        } else if anchor.resizesHorizontalEdgeOnly {
             scale = widthScale
         } else if anchor.resizesVerticalEdgeOnly {
             scale = heightScale
@@ -137,6 +187,10 @@ enum SceneLayerResizing {
 }
 
 extension ResizeAnchor {
+    var keepsAspectRatio: Bool {
+        !resizesHorizontalEdgeOnly && !resizesVerticalEdgeOnly
+    }
+
     var resizesLeftEdge: Bool {
         self == .topLeft || self == .bottomLeft || self == .left
     }

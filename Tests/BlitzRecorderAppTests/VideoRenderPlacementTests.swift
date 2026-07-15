@@ -3,6 +3,27 @@ import CoreGraphics
 import XCTest
 
 final class VideoRenderPlacementTests: XCTestCase {
+    func testSceneRenderPlacementPolicyAppliesEditorScreenZoom() {
+        var scene = RecordingScene(
+            enabledSources: [.screen],
+            sceneLayout: SceneLayout.presetLayout(.screenFullscreen, for: .horizontal)
+        )
+        scene.screenCropAmount = CGPoint(x: 0.4, y: 0.4)
+
+        let placement = SceneRenderGeometry(
+            canvas: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+            scene: scene,
+            origin: .upperLeft
+        ).videoPlacement(for: .screen)
+
+        XCTAssertEqual(placement.sourceCropAmount, CGPoint(x: 0.4, y: 0.4))
+        XCTAssertEqual(placement.sourceCropPosition, .zero)
+        XCTAssertRect(
+            placement.cropRectangle(naturalSize: CGSize(width: 1920, height: 1080)) ?? .zero,
+            equals: CGRect(x: 384, y: 216, width: 1152, height: 648)
+        )
+    }
+
     func testSceneRenderPlacementPolicyResolvesTargetCropAndRadius() {
         var settings = RecordingSettings()
         settings.enabledSources = [.screen, .camera]

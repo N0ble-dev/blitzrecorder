@@ -377,7 +377,7 @@ enum CameraInsetShape: String, CaseIterable {
         case .landscape:
             return "Wide"
         case .portrait:
-            return "Vertical"
+            return "Tall"
         }
     }
 
@@ -1061,6 +1061,8 @@ struct RecordingScene: Equatable {
     var enabledSources: Set<CaptureSource>
     var sceneLayout: SceneLayout
     var screenSourceGeometry: ScreenSourceGeometry
+    var screenCropAmount: CGPoint
+    var screenCropPosition: CGPoint
     var cameraCropAmount: CGPoint
     var cameraCropPosition: CGPoint
     var canvasBackgroundStyle: CanvasBackgroundStyle
@@ -1076,6 +1078,8 @@ struct RecordingScene: Equatable {
             enabledSources: settings.visibleSources,
             sceneLayout: settings.sceneLayout,
             screenSourceGeometry: ScreenSourceGeometry(settings: settings),
+            screenCropAmount: .zero,
+            screenCropPosition: .zero,
             cameraCropAmount: settings.cameraCropAmount,
             cameraCropPosition: settings.cameraCropPosition,
             canvasBackgroundStyle: settings.canvasBackgroundStyle,
@@ -1091,6 +1095,8 @@ struct RecordingScene: Equatable {
         enabledSources: Set<CaptureSource>,
         sceneLayout: SceneLayout,
         screenSourceGeometry: ScreenSourceGeometry = ScreenSourceGeometry(),
+        screenCropAmount: CGPoint = .zero,
+        screenCropPosition: CGPoint = .zero,
         cameraCropAmount: CGPoint = .zero,
         cameraCropPosition: CGPoint = .zero,
         canvasBackgroundStyle: CanvasBackgroundStyle = .black,
@@ -1104,6 +1110,8 @@ struct RecordingScene: Equatable {
         self.enabledSources = enabledSources
         self.sceneLayout = sceneLayout
         self.screenSourceGeometry = screenSourceGeometry
+        self.screenCropAmount = screenCropAmount
+        self.screenCropPosition = screenCropPosition
         self.cameraCropAmount = cameraCropAmount
         self.cameraCropPosition = cameraCropPosition
         self.canvasBackgroundStyle = canvasBackgroundStyle
@@ -1302,6 +1310,7 @@ struct RecordingSettings {
     var trustedRemoteCameraServiceIDs: Set<String> = []
     var remoteCameraSettingsByServiceID: [String: RemoteCameraSettings] = [:]
     var screenCrop: CGRect?
+    var screenWindowZoom: CGFloat = 1
     var cameraCropAmount: CGPoint = .zero
     var cameraCropPosition: CGPoint = .zero
     var canvasBackgroundStyle: CanvasBackgroundStyle = .black
@@ -1382,6 +1391,8 @@ struct RecordingTake {
     let finalVideoURL: URL
     let outputVideoFormat: OutputVideoFormat
     let titleSlug: String?
+    var timelineTrimOffset: CMTime = .zero
+    var sourceTimelineOffsets: [CaptureSource: CMTime] = [:]
 
     var sourceManifestURL: URL {
         scratchDirectory.appendingPathComponent("take.json")

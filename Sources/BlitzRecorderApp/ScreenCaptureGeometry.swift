@@ -101,11 +101,36 @@ enum ScreenCaptureGeometry {
     }
 
     static func screenSourceGeometry(for settings: RecordingSettings, pickedFilter: SCContentFilter) -> ScreenSourceGeometry {
+        let fallbackAspectRatio = pickedContentAspectRatio(for: pickedFilter)
+        return ScreenSourceGeometry(
+            usesPickedContent: true,
+            selectedDisplayID: settings.selectedDisplayID,
+            normalizedCrop: settings.screenCrop,
+            sourceAspectRatio: pickedScreenSourceAspectRatio(
+                for: settings,
+                fallback: fallbackAspectRatio
+            )
+        )
+    }
+
+    private static func pickedScreenSourceAspectRatio(for settings: RecordingSettings, fallback: CGFloat) -> CGFloat {
+        guard let screenCrop = settings.screenCrop,
+              screenCrop.width > 0,
+              screenCrop.height > 0 else {
+            return fallback
+        }
+        return fallback * screenCrop.width / screenCrop.height
+    }
+
+    static func screenSourceGeometryForTesting(settings: RecordingSettings, pickedContentAspectRatio: CGFloat) -> ScreenSourceGeometry {
         ScreenSourceGeometry(
             usesPickedContent: true,
             selectedDisplayID: settings.selectedDisplayID,
-            normalizedCrop: nil,
-            sourceAspectRatio: pickedContentAspectRatio(for: pickedFilter)
+            normalizedCrop: settings.screenCrop,
+            sourceAspectRatio: pickedScreenSourceAspectRatio(
+                for: settings,
+                fallback: pickedContentAspectRatio
+            )
         )
     }
 
@@ -231,7 +256,7 @@ enum ScreenCaptureGeometry {
     }
 
     static func pickedContentAspectRatio(for filter: SCContentFilter) -> CGFloat {
-        let rect = SCShareableContent.info(for: filter).contentRect
+        let rect = filter.contentRect
         guard rect.width > 0, rect.height > 0 else {
             return SceneLayout.defaultScreenAspectRatio
         }
@@ -239,6 +264,11 @@ enum ScreenCaptureGeometry {
     }
 
     static func persistentBinding(forPickedContent filter: SCContentFilter) async -> ScreenSourceBinding? {
+        if #available(macOS 15.2, *),
+           let exactBinding = exactPersistentBinding(for: filter) {
+            return exactBinding
+        }
+
         let contentRect = SCShareableContent.info(for: filter).contentRect
         guard contentRect.width > 0, contentRect.height > 0,
               let content = try? await SCShareableContent.current else {
@@ -294,6 +324,61 @@ enum ScreenCaptureGeometry {
             windowID: target.windowID,
             windowTitle: target.title
         )
+    }
+
+    @available(macOS 15.2, *)
+    private static func exactPersistentBinding(
+        for filter: SCContentFilter
+    ) -> ScreenSourceBinding? {
+        switch filter.style {
+        case .window:
+            guard filter.includedWindows.count == 1,
+                  let window = filter.includedWindows.first,
+                  let application = window.owningApplication else {
+                return nil
+            }
+            return ScreenSourceBinding(
+                kind: .window,
+                displayID: filter.includedDisplays.first.map { String($0.displayID) },
+                bundleIdentifier: application.bundleIdentifier,
+                applicationName: application.applicationName,
+                processID: application.processID,
+                windowID: window.windowID,
+                windowTitle: window.title
+            )
+        case .application:
+            guard filter.includedApplications.count == 1,
+                  let application = filter.includedApplications.first else {
+                return nil
+            }
+            return ScreenSourceBinding(
+                kind: .application,
+                displayID: filter.includedDisplays.first.map { String($0.displayID) },
+                bundleIdentifier: application.bundleIdentifier,
+                applicationName: application.applicationName,
+                processID: application.processID,
+                windowID: nil,
+                windowTitle: nil
+            )
+        case .display:
+            guard filter.includedDisplays.count == 1,
+                  let display = filter.includedDisplays.first else {
+                return nil
+            }
+            return ScreenSourceBinding(
+                kind: .display,
+                displayID: String(display.displayID),
+                bundleIdentifier: nil,
+                applicationName: "Display \(display.displayID) (\(display.width)x\(display.height))",
+                processID: nil,
+                windowID: nil,
+                windowTitle: nil
+            )
+        case .none:
+            return nil
+        @unknown default:
+            return nil
+        }
     }
 
     static func displayLocalSourceRect(

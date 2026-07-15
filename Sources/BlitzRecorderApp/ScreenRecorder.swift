@@ -297,6 +297,13 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
             for: settings,
             sourceAspectRatio: screenSourceGeometry.aspectRatio()
         )
+        let contentRect = SCShareableContent.info(for: filter).contentRect
+        let sourceBounds = CGRect(
+            x: 0,
+            y: 0,
+            width: max(2, contentRect.width),
+            height: max(2, contentRect.height)
+        )
         let configuration = SCStreamConfiguration()
         configuration.width = dimensions.width
         configuration.height = dimensions.height
@@ -308,6 +315,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
             configuration.showMouseClicks = true
         }
         configuration.capturesAudio = false
+        configuration.sourceRect = screenSourceGeometry.sourceRect(in: sourceBounds)
         let backgroundColor = settings.canvasBackgroundStyle.appearance.solidCGColor
         streamBackgroundColor = backgroundColor
         configuration.backgroundColor = backgroundColor

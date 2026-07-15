@@ -186,6 +186,36 @@ final class RecordingLifecycleTests: XCTestCase {
         XCTAssertEqual(project.editorTimeline, timeline)
     }
 
+    func testRecordingProjectPersistsCaptureTimelineSync() throws {
+        var settings = RecordingSettings()
+        settings.outputDirectory = temporaryDirectory()
+
+        let store = TakeFileStore()
+        var take = try store.createTake(settings: settings)
+        take.timelineTrimOffset = CMTime(seconds: 0.5, preferredTimescale: 600)
+        take.sourceTimelineOffsets = [
+            .microphone: CMTime(seconds: 0.1, preferredTimescale: 600)
+        ]
+
+        try store.writeRecordingProject(
+            for: take,
+            settings: settings,
+            sceneEvents: [RecordingSceneEvent(time: 0, scene: RecordingScene(settings: settings))],
+            finalVideoURL: nil
+        )
+        let project = try store.loadRecordingProject(at: take.projectURL)
+        let restoredTake = store.recordingTake(
+            from: project,
+            settings: settings,
+            outputFormat: settings.outputVideoFormat
+        )
+
+        XCTAssertEqual(project.timelineTrimOffsetSeconds, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(project.sourceTimelineOffsetSeconds[CaptureSource.microphone.rawValue], 0.1)
+        XCTAssertEqual(restoredTake.timelineTrimOffset.seconds, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(restoredTake.sourceTimelineOffsets[.microphone]?.seconds ?? -1, 0.1, accuracy: 0.0001)
+    }
+
     func testRecordingProjectDecodesLegacyProjectWithoutChaptersOrTimeline() throws {
         var settings = RecordingSettings()
         settings.outputDirectory = temporaryDirectory()
@@ -268,6 +298,33 @@ final class RecordingLifecycleTests: XCTestCase {
             )
         )
         XCTAssertEqual(store.loadProjectHistory(settings: settings).entries.first?.projectPath, take.projectURL.path)
+    }
+
+    func testTakeFileStorePersistsEditorScreenZoom() throws {
+        var settings = RecordingSettings()
+        settings.outputDirectory = temporaryDirectory()
+        settings.enabledSources = [.screen]
+
+        let store = TakeFileStore()
+        let take = try store.createTake(settings: settings)
+        try Data().write(to: take.screenURL)
+        let updatedProject = try store.updateProjectScene(
+            at: take.projectURL,
+            eventIndex: 0,
+            baseSettings: settings
+        ) { scene in
+            scene.screenCropAmount = CGPoint(x: 0.35, y: 0.35)
+        }
+        let reloadedProject = try store.loadRecordingProject(at: take.projectURL)
+
+        XCTAssertEqual(
+            store.sceneEvents(from: updatedProject).first?.scene.screenCropAmount,
+            CGPoint(x: 0.35, y: 0.35)
+        )
+        XCTAssertEqual(
+            store.sceneEvents(from: reloadedProject).first?.scene.screenCropAmount,
+            CGPoint(x: 0.35, y: 0.35)
+        )
     }
 
     func testTakeFileStoreRejectsSceneCorrectionForMissingSourceFile() throws {
@@ -431,6 +488,55 @@ final class RecordingLifecycleTests: XCTestCase {
         })
     }
 
+    @MainActor
+    func testEditorSceneRefreshPreservesReadyPlayer() async throws {
+        var settings = RecordingSettings()
+        settings.outputDirectory = temporaryDirectory()
+        settings.enabledSources = [.screen]
+        settings.layout = .horizontal
+        settings.outputResolution = .p720
+        settings.sceneLayout.screenFrame = CGRect(x: 0.05, y: 0.1, width: 0.7, height: 0.7)
+
+        let store = TakeFileStore()
+        let take = try store.createTake(settings: settings)
+        try writeTestMovie(
+            url: take.screenURL,
+            codec: .h264,
+            color: (blue: 255, green: 0, red: 0, alpha: 255),
+            frameCount: 90
+        )
+
+        let initialProject = try store.updateProjectScene(
+            at: take.projectURL,
+            eventIndex: 0,
+            baseSettings: settings
+        ) { _ in }
+        let controller = EditorPlaybackController()
+        await controller.load(project: initialProject, baseSettings: settings)
+        let initialPlayer = try XCTUnwrap(controller.videoPlayer(for: .screen))
+        let initialX = try XCTUnwrap(controller.scene(at: 0)?.sceneLayout.screenFrame.minX)
+
+        let updatedProject = try store.updateProjectScene(
+            at: take.projectURL,
+            eventIndex: 0,
+            baseSettings: settings
+        ) { scene in
+            scene.sceneLayout.screenFrame.origin.x = 0.25
+        }
+        let refreshed = controller.refreshSceneTimeline(EditorPlaybackSceneTimelineUpdate(
+            project: updatedProject,
+            baseSettings: settings
+        ))
+        let updatedPlayer = try XCTUnwrap(controller.videoPlayer(for: .screen))
+        let updatedX = try XCTUnwrap(controller.scene(at: 0)?.sceneLayout.screenFrame.minX)
+
+        XCTAssertTrue(refreshed)
+        XCTAssertTrue(controller.isReady)
+        XCTAssertTrue(initialPlayer === updatedPlayer)
+        XCTAssertNotEqual(initialX, updatedX, accuracy: 0.0001)
+        controller.teardown()
+    }
+
     func testEditorPlaybackPlayerItemProducesVideoOutputFrame() async throws {
         var settings = RecordingSettings()
         settings.outputDirectory = temporaryDirectory()
@@ -523,6 +629,64 @@ final class RecordingLifecycleTests: XCTestCase {
 
         XCTAssertEqual(cameraInput.timelineOffset.seconds, 0.5, accuracy: 0.05)
         XCTAssertEqual(playback.duration.seconds, screenInput.duration.seconds, accuracy: 0.05)
+    }
+
+    func testEditorPlaybackBuildsTrimmedPerSourceVideoAsset() async throws {
+        var settings = RecordingSettings()
+        settings.outputDirectory = temporaryDirectory()
+        settings.enabledSources = [.screen]
+        settings.outputResolution = .p720
+
+        let store = TakeFileStore()
+        var take = try store.createTake(settings: settings)
+        take.timelineTrimOffset = CMTime(seconds: 0.5, preferredTimescale: 600)
+        try writeTestMovie(
+            url: take.screenURL,
+            codec: .h264,
+            color: (blue: 255, green: 0, red: 0, alpha: 255),
+            frameCount: 60
+        )
+
+        let project = try store.loadRecordingProject(at: take.projectURL)
+        let playback = try await Merger.editorPlaybackComposition(
+            take: take,
+            settings: settings,
+            sceneEvents: store.sceneEvents(from: project)
+        )
+        let videoAsset = try XCTUnwrap(playback.videoAsset(for: .screen))
+        let videoDuration = try await videoAsset.load(.duration)
+        let screenInput = try XCTUnwrap(playback.sourceInputs.first { $0.kind == .screen })
+
+        XCTAssertEqual(screenInput.timelineOffset.seconds, -0.5, accuracy: 0.0001)
+        XCTAssertEqual(videoDuration.seconds, 1.5, accuracy: 0.05)
+        XCTAssertEqual(playback.duration.seconds, 1.5, accuracy: 0.05)
+    }
+
+    func testEditorPlaybackTrimsAudioFromItsCapturedClockOrigin() async throws {
+        var settings = RecordingSettings()
+        settings.outputDirectory = temporaryDirectory()
+        settings.enabledSources = [.microphone]
+        settings.outputResolution = .p720
+
+        let store = TakeFileStore()
+        var take = try store.createTake(settings: settings)
+        take.timelineTrimOffset = CMTime(seconds: 0.4, preferredTimescale: 600)
+        take.sourceTimelineOffsets = [
+            .microphone: CMTime(seconds: 0.1, preferredTimescale: 600)
+        ]
+        try writeSilentAudioFile(url: take.audioURL)
+
+        let project = try store.loadRecordingProject(at: take.projectURL)
+        let playback = try await Merger.editorPlaybackComposition(
+            take: take,
+            settings: settings,
+            sceneEvents: store.sceneEvents(from: project)
+        )
+        let input = try XCTUnwrap(playback.audioInputs.first)
+
+        XCTAssertEqual(input.track.timeRange.start.seconds, 0, accuracy: 0.0001)
+        XCTAssertEqual(input.track.timeRange.duration.seconds, 0.2, accuracy: 0.03)
+        XCTAssertEqual(playback.duration.seconds, 0.2, accuracy: 0.03)
     }
 
     func testEditorPlaybackTrimsProcessedCameraLeadInUsingRawCameraTiming() async throws {

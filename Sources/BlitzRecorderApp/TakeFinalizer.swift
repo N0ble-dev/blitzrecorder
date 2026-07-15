@@ -136,7 +136,10 @@ final class TakeFinalizer {
         sceneEvents: [RecordingSceneEvent] = []
     ) async -> TakeFinalizationOutcome {
         let finalizationSettings = settingsForFinalization(settings, captureSummary: captureSummary)
-        let renamedTake = await renameFromTranscriptIfPossible(take: take, settings: finalizationSettings)
+        var synchronizedTake = take
+        synchronizedTake.timelineTrimOffset = captureSummary.timelineTrimOffset
+        synchronizedTake.sourceTimelineOffsets = captureSummary.sourceTimelineOffsets
+        let renamedTake = await renameFromTranscriptIfPossible(take: synchronizedTake, settings: finalizationSettings)
         let processedTake = await removeCameraBackgroundIfNeeded(from: renamedTake, settings: finalizationSettings)
         let plan = TakeFinalizationPlan(
             take: processedTake,
@@ -444,7 +447,7 @@ final class TakeFinalizer {
         try moveIfPresent(from: currentSystemAudioURL, to: renamedSystemAudioURL)
         try transcript.write(to: renamedTranscriptURL, atomically: true, encoding: .utf8)
 
-        return RecordingTake(
+        var renamedTake = RecordingTake(
             scratchDirectory: renamedDirectory,
             screenURL: renamedScreenURL,
             cameraURL: renamedCameraURL,
@@ -455,10 +458,13 @@ final class TakeFinalizer {
             outputVideoFormat: take.outputVideoFormat,
             titleSlug: datedSlug
         )
+        renamedTake.timelineTrimOffset = take.timelineTrimOffset
+        renamedTake.sourceTimelineOffsets = take.sourceTimelineOffsets
+        return renamedTake
     }
 
     private func replaceCameraURL(in take: RecordingTake, with cameraURL: URL) -> RecordingTake {
-        RecordingTake(
+        var updatedTake = RecordingTake(
             scratchDirectory: take.scratchDirectory,
             screenURL: take.screenURL,
             cameraURL: cameraURL,
@@ -469,6 +475,9 @@ final class TakeFinalizer {
             outputVideoFormat: take.outputVideoFormat,
             titleSlug: take.titleSlug
         )
+        updatedTake.timelineTrimOffset = take.timelineTrimOffset
+        updatedTake.sourceTimelineOffsets = take.sourceTimelineOffsets
+        return updatedTake
     }
 
     private func moveIfPresent(from source: URL, to destination: URL) throws {

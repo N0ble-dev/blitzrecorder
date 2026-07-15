@@ -8,6 +8,8 @@ extension RecordingScene {
             enabledSources: enabledSources,
             sceneLayout: sceneLayout.interpolated(to: target.sceneLayout, progress: progress),
             screenSourceGeometry: progress < 1 ? screenSourceGeometry : target.screenSourceGeometry,
+            screenCropAmount: screenCropAmount.interpolated(to: target.screenCropAmount, progress: progress),
+            screenCropPosition: screenCropPosition.interpolated(to: target.screenCropPosition, progress: progress),
             cameraCropAmount: cameraCropAmount.interpolated(to: target.cameraCropAmount, progress: progress),
             cameraCropPosition: cameraCropPosition.interpolated(to: target.cameraCropPosition, progress: progress),
             canvasBackgroundStyle: progress < 1 ? canvasBackgroundStyle : target.canvasBackgroundStyle,

@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import BlitzRecorderCore
 @testable import BlitzRecorderApp
@@ -33,14 +34,93 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
         XCTAssertEqual(presentedPane, .permissions)
     }
 
-    func testPickedScreenCanRecordWhenSystemAudioPermissionIsInactive() {
+    func testPickedScreenDoesNotBlockReadinessForSystemAudioPreflight() {
         var settings = RecordingSettings()
         settings.enabledSources = [.screen, .systemAudio]
         settings.usesPickedScreenContent = true
 
-        let blockers = PermissionGate.blockers(for: settings)
+        let system = TestRecordingPermissionSystem()
+        system.screenCaptureAccess = false
+        let blockers = PermissionGate(system: system).blockers(for: settings)
 
         XCTAssertFalse(blockers.contains { $0.source == .systemAudio })
+    }
+
+    func testSystemAudioOnlyDoesNotBlockReadinessForScreenPreflight() {
+        var settings = RecordingSettings()
+        settings.enabledSources = [.systemAudio]
+
+        let system = TestRecordingPermissionSystem()
+        system.screenCaptureAccess = false
+        let blockers = PermissionGate(system: system).blockers(for: settings)
+
+        XCTAssertTrue(blockers.isEmpty)
+    }
+
+    func testScreenSourceSelectionMakesBindingTheSinglePersistentTruth() {
+        var settings = RecordingSettings()
+        settings.usesPickedScreenContent = true
+        settings.selectedDisplayID = "old-display"
+        settings.screenCrop = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+        let selection = ScreenSourceSelection()
+        let binding = ScreenSourceBinding.display(id: "new-display")
+
+        let updated = selection.selectBinding(
+            ScreenSourceSelection.BindingRequest(binding: binding, settings: settings)
+        )
+
+        XCTAssertEqual(updated.screenSourceBinding, binding)
+        XCTAssertEqual(updated.selectedDisplayID, "new-display")
+        XCTAssertFalse(updated.usesPickedScreenContent)
+        XCTAssertNil(updated.screenCrop)
+        XCTAssertNil(selection.pickedContentFilter)
+    }
+
+    func testScreenSourceSelectionReconcilesExpiredPickerStateWithPersistentAccess() {
+        var settings = RecordingSettings()
+        settings.usesPickedScreenContent = true
+        settings.screenSourceBinding = .display(id: "display-2")
+        let selection = ScreenSourceSelection()
+
+        let result = selection.reconcile(
+            ScreenSourceSelection.ReconciliationRequest(
+                settings: settings,
+                hasPersistentAccess: true
+            )
+        )
+
+        XCTAssertTrue(result.changed)
+        XCTAssertFalse(result.settings.usesPickedScreenContent)
+        XCTAssertEqual(result.settings.selectedDisplayID, "display-2")
+    }
+
+    func testPermissionGateRequestsScreenAccessOnlyOncePerSession() {
+        let system = TestRecordingPermissionSystem()
+        system.screenCaptureAccess = false
+        let gate = PermissionGate(system: system)
+
+        XCTAssertFalse(gate.requestScreenCaptureAccessIfNeeded())
+        XCTAssertFalse(gate.requestScreenCaptureAccessIfNeeded())
+        XCTAssertEqual(system.screenCaptureRequestCount, 1)
+    }
+
+    func testRecordingSessionOwnsPreparationAndExportTransitions() {
+        let session = RecordingSession()
+        let outputAccess = OutputDirectoryAccess(
+            url: FileManager.default.temporaryDirectory,
+            usesSecurityScopedBookmark: false
+        )
+
+        XCTAssertTrue(session.beginPreparation(
+            RecordingSession.PreparationRequest(outputDirectoryAccess: outputAccess)
+        ))
+        XCTAssertEqual(session.state, .starting)
+        session.failPreparation()
+        XCTAssertEqual(session.state, .idle)
+        XCTAssertTrue(session.beginExport())
+        XCTAssertEqual(session.state, .finishing)
+        session.finishExport()
+        XCTAssertEqual(session.state, .idle)
     }
 
     func testDisplayAutoIsNotConcreteScreenSelection() {
@@ -84,13 +164,63 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
             source: .systemAudio,
             permission: "Screen & System Audio Recording",
             status: "Mac audio capture needs Screen Recording access",
-            recovery: "Enable Screen Recording, or turn System Audio off."
+            recovery: "macOS lists this under Screen Recording; enable it there or turn System Audio off."
         )
 
         XCTAssertEqual(
             blocker.sentence,
-            "System Audio needs Screen Recording access. Enable Screen Recording, or turn System Audio off."
+            "System Audio needs Screen Recording access. macOS lists this under Screen Recording; enable it there or turn System Audio off."
         )
+    }
+
+    func testSystemAudioOnlySummaryNamesMacAudioInsteadOfScreenSelection() {
+        let blockers = [
+            PermissionBlocker(
+                source: .systemAudio,
+                permission: "Screen & System Audio Recording",
+                status: "Mac audio capture needs Screen Recording access",
+                recovery: "macOS lists this under Screen Recording; enable it there or turn System Audio off."
+            )
+        ]
+
+        XCTAssertEqual(blockers.shortSummary, "Mac audio needs Screen Recording")
+    }
+
+    func testScreenOnlySelectedSourceSummaryOffersPickerInsteadOfPermissionOnly() {
+        let blockers = [
+            PermissionBlocker(
+                source: .screen,
+                permission: "Screen & System Audio Recording",
+                status: "source selected; full-capture access inactive",
+                recovery: "Use Pick Screen for picker-based capture."
+            )
+        ]
+
+        XCTAssertEqual(blockers.shortSummary, "Pick again or enable Screen Recording")
+    }
+
+    func testSelectedScreenSourceWithoutPersistentAccessSuggestsPickerWhenSystemAudioOff() {
+        var settings = RecordingSettings()
+        settings.enabledSources = [.screen]
+        settings.usesPickedScreenContent = false
+        settings.screenSourceBinding = .display(id: "display-1")
+
+        XCTAssertTrue(RecorderViewModel.shouldSuggestScreenPicker(
+            readiness: screenCaptureReadiness,
+            settings: settings
+        ))
+    }
+
+    func testSelectedScreenSourceWithoutPersistentAccessStillSuggestsPickerWhenSystemAudioOn() {
+        var settings = RecordingSettings()
+        settings.enabledSources = [.screen, .systemAudio]
+        settings.usesPickedScreenContent = false
+        settings.screenSourceBinding = .display(id: "display-1")
+
+        XCTAssertTrue(RecorderViewModel.shouldSuggestScreenPicker(
+            readiness: screenCaptureReadiness,
+            settings: settings
+        ))
     }
 
     func testViewModelAppliesSavedOutputAfterStopWarning() {
@@ -200,6 +330,36 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
 
         viewModel.setAppOnlyCapture(true)
         XCTAssertEqual(viewModel.settings.screenSourceBinding, appBinding)
+    }
+
+    func testScreenSourceToggleRestoresSavedApplicationWithoutPicker() {
+        let defaults = temporaryDefaults()
+        let coordinator = RecorderCoordinator(
+            accessController: AccessController(defaults: defaults),
+            defaults: defaults
+        )
+        let viewModel = RecorderViewModel(coordinator: coordinator, previewStage: PreviewStageView())
+        let appBinding = ScreenSourceBinding(
+            kind: .application,
+            displayID: "display-1",
+            bundleIdentifier: "com.google.Chrome",
+            applicationName: "Google Chrome",
+            processID: 123,
+            windowID: nil,
+            windowTitle: nil
+        )
+
+        viewModel.setScreenSource(appBinding)
+        XCTAssertTrue(viewModel.isSourceConfigured(.screen))
+
+        viewModel.toggleSource(.screen)
+        XCTAssertFalse(viewModel.isSourceConfigured(.screen))
+
+        viewModel.toggleSource(.screen)
+
+        XCTAssertTrue(viewModel.isSourceConfigured(.screen))
+        XCTAssertEqual(viewModel.settings.screenSourceBinding, appBinding)
+        XCTAssertFalse(viewModel.settings.usesPickedScreenContent)
     }
 
     func testStartingStateClearsPostRecordingStatus() {
@@ -413,6 +573,92 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
         XCTAssertEqual(viewModel.detailMessage, "No window source available for Google Chrome.")
     }
 
+    func testWindowOnlyPrefersFocusedWindowOverOldDisplaySource() throws {
+        let displayBinding = ScreenSourceBinding.display(id: "display-1")
+        let windowBinding = ScreenSourceBinding(
+            kind: .window,
+            displayID: "display-1",
+            bundleIdentifier: "com.apple.Safari",
+            applicationName: "Safari",
+            processID: 123,
+            windowID: 42,
+            windowTitle: "BlitzRecorder"
+        )
+        let selection = RecorderViewModel.preferredWindowBinding(
+            context: RecorderViewModel.WindowSourceSelectionContext(
+                currentSource: displayBinding,
+                targetWindow: TargetWindowInfo(
+                    processID: 123,
+                    appName: "Safari",
+                    windowTitle: "BlitzRecorder",
+                    frame: CGRect(x: 0, y: 0, width: 1280, height: 720)
+                ),
+                availableSources: [
+                    ScreenSourceOption(
+                        binding: displayBinding,
+                        title: "Display 1",
+                        subtitle: "Everything on this display",
+                        systemImage: "display",
+                        icon: nil
+                    ),
+                    ScreenSourceOption(
+                        binding: windowBinding,
+                        title: "BlitzRecorder",
+                        subtitle: "Safari - only this window",
+                        systemImage: "app.window",
+                        icon: nil
+                    )
+                ]
+            )
+        )
+
+        XCTAssertEqual(try XCTUnwrap(selection), windowBinding)
+    }
+
+    func testWindowOnlyReplacesOldDisplayWithFocusedWindowSource() {
+        let defaults = temporaryDefaults()
+        var settings = RecordingSettings()
+        settings.enabledSources = [.screen]
+        settings.screenSourceBinding = .display(id: "display-1")
+        RecordingSettingsStore.save(settings, defaults: defaults)
+        let viewModel = RecorderViewModel(
+            coordinator: RecorderCoordinator(
+                accessController: AccessController(defaults: defaults),
+                defaults: defaults
+            ),
+            previewStage: PreviewStageView()
+        )
+        let windowBinding = ScreenSourceBinding(
+            kind: .window,
+            displayID: "display-1",
+            bundleIdentifier: "com.apple.Safari",
+            applicationName: "Safari",
+            processID: 123,
+            windowID: 42,
+            windowTitle: "BlitzRecorder"
+        )
+        viewModel.targetWindowInfo = TargetWindowInfo(
+            processID: 123,
+            appName: "Safari",
+            windowTitle: "BlitzRecorder",
+            frame: CGRect(x: 0, y: 0, width: 1280, height: 720)
+        )
+        viewModel.availableScreenSources = [
+            ScreenSourceOption(
+                binding: windowBinding,
+                title: "BlitzRecorder",
+                subtitle: "Safari - only this window",
+                systemImage: "app.window",
+                icon: nil
+            )
+        ]
+
+        viewModel.setWindowOnlyCapture()
+
+        XCTAssertEqual(viewModel.settings.screenSourceBinding, windowBinding)
+        XCTAssertEqual(viewModel.screenCaptureAreaSelection, .activeWindow)
+    }
+
     func testSliderWindowZoomKeepsWindowModeSelected() {
         let defaults = temporaryDefaults()
         var settings = RecordingSettings()
@@ -431,6 +677,7 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
 
         XCTAssertEqual(viewModel.screenCaptureAreaSelection, .activeWindow)
         XCTAssertEqual(viewModel.targetWindowZoom, 1.25)
+        XCTAssertEqual(RecordingSettingsStore.load(defaults: defaults).screenWindowZoom, 1.25)
     }
 
     func testStepWindowZoomKeepsWindowModeSelected() {
@@ -811,6 +1058,23 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
         return directory
     }
 
+    private var screenCaptureReadiness: RecordingReadiness {
+        RecordingReadiness(
+            isReady: false,
+            title: "Start Recording",
+            detail: "Screen source selected; full-capture access is inactive.",
+            blockers: [
+                PermissionBlocker(
+                    source: .screen,
+                    permission: "Screen & System Audio Recording",
+                    status: "source selected; full-capture access inactive",
+                    recovery: "Use Pick Screen for picker-based capture."
+                )
+            ],
+            statusLine: "Screen: source selected; needs Screen Recording for full capture"
+        )
+    }
+
     private func XCTAssertRect(
         _ actual: CGRect,
         equals expected: CGRect,
@@ -821,5 +1085,46 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
         XCTAssertEqual(actual.origin.y, expected.origin.y, accuracy: 0.0001, file: file, line: line)
         XCTAssertEqual(actual.size.width, expected.size.width, accuracy: 0.0001, file: file, line: line)
         XCTAssertEqual(actual.size.height, expected.size.height, accuracy: 0.0001, file: file, line: line)
+    }
+}
+
+@MainActor
+private final class TestRecordingPermissionSystem: RecordingPermissionSystem {
+    var screenCaptureAccess = true
+    var accessibilityAccess = true
+    var screenCaptureRequestCount = 0
+    var accessibilityRequestCount = 0
+    var cameraStatus: AVAuthorizationStatus = .authorized
+    var microphoneStatus: AVAuthorizationStatus = .authorized
+    var openedPanes: [RecordingPermissionSettingsPane] = []
+
+    func hasScreenCaptureAccess() -> Bool {
+        screenCaptureAccess
+    }
+
+    func requestScreenCaptureAccess() -> Bool {
+        screenCaptureRequestCount += 1
+        return screenCaptureAccess
+    }
+
+    func hasAccessibilityAccess() -> Bool {
+        accessibilityAccess
+    }
+
+    func requestAccessibilityAccess() -> Bool {
+        accessibilityRequestCount += 1
+        return accessibilityAccess
+    }
+
+    func authorizationStatus(for mediaType: AVMediaType) -> AVAuthorizationStatus {
+        mediaType == .video ? cameraStatus : microphoneStatus
+    }
+
+    func requestAccess(for mediaType: AVMediaType) async -> Bool {
+        authorizationStatus(for: mediaType) == .authorized
+    }
+
+    func openSettings(_ pane: RecordingPermissionSettingsPane) {
+        openedPanes.append(pane)
     }
 }

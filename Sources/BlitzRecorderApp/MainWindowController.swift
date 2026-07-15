@@ -24,6 +24,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var cameraPreviewDeviceID: String?
     private var preservedHiddenScreenPreviewSelectionRevision: Int?
     private var lastStartedScreenCaptureSignature: ScreenCaptureSignature?
+    private var screenPreviewStartRevision = 0
     private var settingsWindowController: SettingsWindowController?
     private var currentRecordingState: RecordingState = .idle
     private var idlePreviewRestartTask: Task<Void, Never>?
@@ -462,7 +463,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private func refreshPermissionGate() {
         guard coordinator.state == .idle else { return }
         let readiness = coordinator.recordingReadiness()
-        PermissionGate.writeDiagnostic(readiness)
+        coordinator.permissionGate.writeDiagnostic(readiness)
         if !readiness.isReady {
             viewModel.applyMessage(shortReadinessMessage(readiness))
         } else if viewModel.detailMessage.hasPrefix("Screen permission") ||
@@ -477,9 +478,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         if readiness.isReady { return "" }
         if readiness.blockers.contains(where: { $0.source == .screen || $0.source == .systemAudio }) {
             if coordinator.settings.screenSourceBinding?.isConcreteSelection != true {
-                return "Pick a screen to preview, or enable Screen Recording for full capture."
+                return "Enable Screen Recording, then choose a screen source."
             }
-            return "Enable Screen Recording to preview the selected screen source."
+            return "Enable Screen Recording to preview the selected source."
         }
         if let blocker = readiness.blockers.first {
             return "\(blocker.source.rawValue) permission required."
@@ -489,6 +490,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     private func startScreenPreview() {
         if coordinator.settings.hiddenSources.contains(.screen) {
+            screenPreviewStartRevision += 1
             previewStage.screenPreview.setMessage("Screen source hidden")
             lastStartedScreenCaptureSignature = nil
             refreshPermissionGate()
@@ -496,6 +498,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
 
         guard coordinator.settings.enabledSources.contains(.screen) else {
+            screenPreviewStartRevision += 1
             Task { await coordinator.stopScreenPreview() }
             previewStage.screenPreview.setMessage("Screen source off")
             lastStartedScreenCaptureSignature = nil
@@ -504,12 +507,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
 
         guard coordinator.settings.usesPickedScreenContent || coordinator.hasScreenCaptureAccess() else {
+            screenPreviewStartRevision += 1
             if coordinator.settings.screenSourceBinding?.isConcreteSelection != true {
                 previewStage.screenPreview.setMessage("")
-                viewModel.applyMessage("Pick a screen to preview, or enable Screen Recording for full capture.")
+                viewModel.applyMessage("Enable Screen Recording, then choose a screen source.")
             } else {
-                previewStage.screenPreview.setMessage("Screen Recording permission required")
-                viewModel.applyMessage("Enable Screen Recording to preview the selected screen source.")
+                previewStage.screenPreview.setMessage("")
+                viewModel.applyMessage("Enable Screen Recording to preview the selected source.")
             }
             lastStartedScreenCaptureSignature = nil
             refreshPermissionGate()
@@ -520,17 +524,26 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             previewStage.screenPreview.setMessage("Starting screen preview")
         }
         lastStartedScreenCaptureSignature = currentScreenCaptureSignature()
-        Task {
+        screenPreviewStartRevision += 1
+        let previewStartRevision = screenPreviewStartRevision
+        let previewSettings = coordinator.settings
+        Task { [weak self] in
+            guard let self else { return }
             do {
                 try await coordinator.startScreenPreview { [weak self] frame in
-                    self?.previewStage.screenSourceAspectRatio = frame.sourceAspectRatio
-                    self?.previewStage.screenPreview.enqueuePreviewSampleBuffer(frame.sampleBuffer)
+                    guard let self, self.screenPreviewStartRevision == previewStartRevision else { return }
+                    self.previewStage.screenSourceAspectRatio = frame.sourceAspectRatio
+                    self.previewStage.screenPreview.enqueuePreviewSampleBuffer(frame.sampleBuffer)
                 }
+                guard self.screenPreviewStartRevision == previewStartRevision else { return }
                 refreshPermissionGate()
             } catch {
-                guard coordinator.state == .idle else { return }
-                previewStage.screenPreview.setMessage("Screen preview unavailable")
-                viewModel.applyMessage("Screen preview failed: \(error.localizedDescription)")
+                guard self.screenPreviewStartRevision == previewStartRevision,
+                      coordinator.state == .idle else { return }
+                previewStage.screenPreview.setMessage("")
+                viewModel.applyMessage(
+                    ScreenPreviewFailureMessage.detailMessage(for: error, settings: previewSettings)
+                )
                 lastStartedScreenCaptureSignature = nil
                 refreshPermissionGate()
             }
@@ -579,7 +592,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             return
         }
 
-        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        switch coordinator.permissionGate.cameraAuthorizationStatus {
         case .authorized:
             break
         case .notDetermined:
@@ -592,7 +605,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             }
             isStartingCameraPreview = true
             Task {
-                let granted = await AVCaptureDevice.requestAccess(for: .video)
+                let granted = await coordinator.permissionGate.requestCameraAccess()
                 isStartingCameraPreview = false
                 if granted {
                     startCameraPreview()

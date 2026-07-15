@@ -44,6 +44,18 @@ final class ScreenCaptureGeometryTests: XCTestCase {
         )
     }
 
+    func testPickedContentCropPreservesSourceAspectRatio() {
+        var settings = RecordingSettings()
+        settings.screenCrop = CGRect(x: 0.2, y: 0.2, width: 0.5, height: 0.5)
+
+        let geometry = ScreenCaptureGeometry.screenSourceGeometryForTesting(
+            settings: settings,
+            pickedContentAspectRatio: 16.0 / 9.0
+        )
+
+        XCTAssertEqual(geometry.aspectRatio(), 16.0 / 9.0, accuracy: 0.0001)
+    }
+
     func testDisplayLocalSourceRectConvertsWindowFrameToDisplayPixels() throws {
         let rect = try XCTUnwrap(ScreenCaptureGeometry.displayLocalSourceRect(
             for: CGRect(x: 150, y: 250, width: 400, height: 300),

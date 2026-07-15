@@ -47,6 +47,12 @@ enum ScreenCaptureAreaSelection: Equatable {
 @Observable
 @MainActor
 final class RecorderViewModel {
+    struct WindowSourceSelectionContext {
+        let currentSource: ScreenSourceBinding
+        let targetWindow: TargetWindowInfo?
+        let availableSources: [ScreenSourceOption]
+    }
+
     private static let firstRunOnboardingKey = "onboarding.capturePermissions.v1"
 
     let coordinator: RecorderCoordinator
@@ -71,6 +77,7 @@ final class RecorderViewModel {
 
     var availableDisplays: [SourceOption] = []
     var availableScreenSources: [ScreenSourceOption] = []
+    var screenSourceThumbnails: [String: NSImage] = [:]
     var availableCameras: [SourceOption] = []
     var availableMicrophones: [SourceOption] = []
     var directRemoteCameraHost: String = ""
@@ -102,6 +109,7 @@ final class RecorderViewModel {
     var targetWindowStatus: String = "Detecting target..."
     var targetWindowZoom: CGFloat = 1.0
     @ObservationIgnored private var targetWindowZoomTask: Task<Void, Never>?
+    @ObservationIgnored private var screenSourceThumbnailTask: Task<Void, Never>?
     private var permissionRefreshToken = 0
     private var remoteCameraRefreshToken = 0
 
@@ -292,24 +300,48 @@ final class RecorderViewModel {
     var permissionStatusRows: [PermissionStatusRow] {
         _ = permissionRefreshToken
         let readiness = recordingReadiness
+        let hasPersistentScreenCaptureAccess = coordinator.hasScreenCaptureAccess()
+        let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+            ?? "BlitzRecorder"
         var rows = CaptureSource.allCases.map { source in
             let isActive = settings.enabledSources.contains(source)
             let isSelectedScreenAwaitingFullCaptureAccess = source == .screen
                 && settings.screenSourceBinding?.isConcreteSelection == true
                 && !settings.usesPickedScreenContent
-                && !coordinator.hasScreenCaptureAccess()
+                && !hasPersistentScreenCaptureAccess
             let isBlocked = readiness.blockers.contains { $0.source == source }
+            let status: String
+            if !isActive {
+                status = "not used by current setup"
+            } else {
+                switch source {
+                case .screen:
+                    status = hasPersistentScreenCaptureAccess
+                        ? "allowed for \(appName)"
+                        : "not enabled for \(appName)"
+                case .systemAudio:
+                    status = isBlocked
+                        ? coordinator.permissionGate.status(
+                            PermissionGate.StatusRequest(source: source, settings: settings)
+                        )
+                        : "enabled for recordings"
+                case .camera, .microphone:
+                    status = coordinator.permissionGate.status(
+                        PermissionGate.StatusRequest(source: source, settings: settings)
+                    )
+                }
+            }
             return PermissionStatusRow(
                 title: source.rawValue,
                 symbol: source.symbolName,
-                status: isActive ? PermissionGate.status(for: source, settings: settings) : "not used by current setup",
+                status: status,
                 isActive: isActive,
                 isBlocked: isBlocked && !isSelectedScreenAwaitingFullCaptureAccess,
                 isOptional: false,
                 source: source
             )
         }
-        let hasAccessibilityAccess = PermissionGate.hasAccessibilityAccess
+        let hasAccessibilityAccess = coordinator.permissionGate.hasAccessibilityAccess
         rows.append(PermissionStatusRow(
             title: "Accessibility",
             symbol: "accessibility",
@@ -339,9 +371,6 @@ final class RecorderViewModel {
     }
 
     var primaryPermissionActionTitle: String {
-        if shouldSuggestScreenPicker {
-            return "Pick Screen"
-        }
         if recordingReadiness.blockers.contains(where: { $0.source == .camera || $0.source == .microphone }) {
             return "Request Access"
         }
@@ -352,19 +381,32 @@ final class RecorderViewModel {
     }
 
     var shouldSuggestScreenPicker: Bool {
-        recordingReadiness.blockers.contains { $0.source == .screen }
+        Self.shouldSuggestScreenPicker(readiness: recordingReadiness, settings: settings)
+    }
+
+    static func shouldSuggestScreenPicker(
+        readiness: RecordingReadiness,
+        settings: RecordingSettings
+    ) -> Bool {
+        readiness.blockers.contains { $0.source == .screen }
             && settings.enabledSources.contains(.screen)
             && !settings.usesPickedScreenContent
-            && settings.screenSourceBinding?.isConcreteSelection != true
     }
 
     var isPersistentScreenCaptureAccessActive: Bool {
         coordinator.hasScreenCaptureAccess()
     }
 
+    var shouldShowAppWindowSourcePermissionHint: Bool {
+        !isPersistentScreenCaptureAccessActive
+            && !availableScreenSources.contains {
+                $0.binding.kind == .application || $0.binding.kind == .window
+            }
+    }
+
     var hasAccessibilityAccessForWindowControls: Bool {
         _ = permissionRefreshToken
-        return PermissionGate.hasAccessibilityAccess
+        return coordinator.permissionGate.hasAccessibilityAccess
     }
 
     var canShowScreenWindowFitControls: Bool {
@@ -372,7 +414,7 @@ final class RecorderViewModel {
         return Self.canShowScreenWindowFitControls(
             settings: settings,
             targetWindowInfo: targetWindowInfo,
-            hasAccessibilityAccess: PermissionGate.hasAccessibilityAccess,
+            hasAccessibilityAccess: coordinator.permissionGate.hasAccessibilityAccess,
             canEditScene: canEditScene
         )
     }
@@ -405,7 +447,7 @@ final class RecorderViewModel {
 
     func requestAccessibilityForWindowControls() {
         Task {
-            let result = await PermissionGate.requestAccessibilityAccessForWindowControls()
+            let result = await coordinator.permissionGate.requestAccessibilityAccessForWindowControls()
             detailMessage = result.message
             refreshPermissionStatus()
             refreshTargetWindow()
@@ -416,8 +458,7 @@ final class RecorderViewModel {
         let needsScreen = settings.enabledSources.contains(.screen)
             && !settings.usesPickedScreenContent
             && settings.screenSourceBinding?.isConcreteSelection == true
-        let needsSystemAudio = settings.enabledSources.contains(.systemAudio)
-        return (needsScreen || needsSystemAudio) && !isPersistentScreenCaptureAccessActive
+        return needsScreen && !isPersistentScreenCaptureAccessActive
     }
 
     init(
@@ -428,6 +469,7 @@ final class RecorderViewModel {
         self.accessController = coordinator.accessController
         self.previewStage = previewStage
         self.settings = coordinator.settings
+        self.targetWindowZoom = coordinator.settings.screenWindowZoom
         self.showsFirstRunOnboarding = ProcessInfo.processInfo.environment["BLITZRECORDER_FORCE_ONBOARDING"] == "1"
             || !UserDefaults.standard.bool(forKey: Self.firstRunOnboardingKey)
         refreshRecentProjects()
@@ -559,6 +601,7 @@ final class RecorderViewModel {
 
     func syncSettings() {
         settings = coordinator.settings
+        targetWindowZoom = coordinator.settings.screenWindowZoom
         syncScreenCaptureAreaSelection()
         syncSelectedSource()
         syncPreviewInteractionState()
@@ -597,6 +640,21 @@ final class RecorderViewModel {
         availableScreenSources = await screenSources
         availableCameras = coordinator.availableCameras()
         availableMicrophones = coordinator.availableMicrophones()
+        refreshScreenSourceThumbnails()
+    }
+
+    private func refreshScreenSourceThumbnails() {
+        screenSourceThumbnailTask?.cancel()
+        let bindings = availableScreenSources.map(\.binding)
+        let activeIDs = Set(bindings.map(\.id))
+        screenSourceThumbnails = screenSourceThumbnails.filter { activeIDs.contains($0.key) }
+
+        screenSourceThumbnailTask = Task { [weak self] in
+            guard let self else { return }
+            let thumbnails = await coordinator.screenSourceThumbnails(for: bindings)
+            guard !Task.isCancelled else { return }
+            screenSourceThumbnails.merge(thumbnails) { _, refreshed in refreshed }
+        }
     }
 
     func refreshRemoteCameraState() {
@@ -616,6 +674,9 @@ final class RecorderViewModel {
 
     func toggleSource(_ source: CaptureSource) {
         if source == .screen, !isSourceConfigured(.screen) {
+            if restoreSavedScreenSource() {
+                return
+            }
             pickAndEnableScreenSource()
             return
         }
@@ -626,6 +687,15 @@ final class RecorderViewModel {
             coordinator.addSource(source)
         }
         syncSettings()
+    }
+
+    private func restoreSavedScreenSource() -> Bool {
+        guard settings.screenSourceBinding?.isConcreteSelection == true else {
+            return false
+        }
+        coordinator.addSource(.screen)
+        syncSettings()
+        return true
     }
 
     func setSourceVisible(_ source: CaptureSource, visible: Bool) {
@@ -736,6 +806,10 @@ final class RecorderViewModel {
 
     var screenSplitHeight: Double {
         Double(settings.sceneLayout.screenSplitHeight ?? SceneLayout.defaultScreenSplitHeight)
+    }
+
+    var isCameraInsetLayout: Bool {
+        SceneLayout.isCameraInsetFrame(settings.sceneLayout.cameraFrame)
     }
 
     var cameraInsetAlignment: CameraInsetAlignment {
@@ -855,6 +929,7 @@ final class RecorderViewModel {
         cancelScheduledTargetWindowFit()
         screenCaptureAreaSelection = .activeWindow
         targetWindowZoom = clampedTargetWindowZoom(zoom)
+        coordinator.setScreenWindowZoom(targetWindowZoom)
         fitCurrentScreenWindow(zoom: targetWindowZoom)
         syncSettings()
         refreshTargetWindow()
@@ -863,6 +938,8 @@ final class RecorderViewModel {
     func setTargetWindowZoom(_ zoom: CGFloat) {
         screenCaptureAreaSelection = .activeWindow
         targetWindowZoom = clampedTargetWindowZoom(zoom)
+        coordinator.setScreenWindowZoom(targetWindowZoom)
+        settings = coordinator.settings
         scheduleTargetWindowFit()
     }
 
@@ -942,6 +1019,7 @@ final class RecorderViewModel {
     private func applyCurrentScreenWindowZoom(_ zoom: CGFloat) {
         screenCaptureAreaSelection = .activeWindow
         targetWindowZoom = clampedTargetWindowZoom(zoom)
+        coordinator.setScreenWindowZoom(targetWindowZoom)
         fitCurrentScreenWindow(zoom: targetWindowZoom)
         syncSettings()
         refreshTargetWindow()
@@ -1278,8 +1356,7 @@ final class RecorderViewModel {
             detailMessage = "No window source available for \(settings.screenSourceBinding?.displayName ?? "this app")."
             return
         }
-        screenCaptureAreaSelection = .activeWindow
-        fitFrontWindowForShorts()
+        fitScreenItemToFrontWindow()
     }
 
     func setFullDisplayScreenCapture() {
@@ -1294,17 +1371,45 @@ final class RecorderViewModel {
     }
 
     private func preferredWindowBindingForCurrentSource() -> ScreenSourceBinding? {
-        let windowBindings = availableScreenSources
+        guard let currentSource = settings.screenSourceBinding else { return nil }
+        return Self.preferredWindowBinding(
+            context: WindowSourceSelectionContext(
+                currentSource: currentSource,
+                targetWindow: targetWindowInfo,
+                availableSources: availableScreenSources
+            )
+        )
+    }
+
+    static func preferredWindowBinding(
+        context: WindowSourceSelectionContext
+    ) -> ScreenSourceBinding? {
+        let windowBindings = context.availableSources
             .map(\.binding)
             .filter { $0.kind == .window }
-        guard !windowBindings.isEmpty,
-              let current = settings.screenSourceBinding,
-              current.kind == .application else {
-            return nil
+        guard !windowBindings.isEmpty else { return nil }
+
+        if let targetWindow = context.targetWindow {
+            let processMatches = windowBindings.filter { binding in
+                guard let processID = targetWindow.processID else {
+                    return binding.applicationName == targetWindow.appName
+                }
+                return binding.processID == processID
+            }
+            if let windowTitle = targetWindow.windowTitle,
+               let titleMatch = processMatches.first(where: { $0.windowTitle == windowTitle }) {
+                return titleMatch
+            }
+            if let processMatch = processMatches.first {
+                return processMatch
+            }
         }
 
-        let matching = windowBindings.filter { $0.matches(applicationBinding: current) }
-        if let displayID = current.displayID,
+        guard context.currentSource.kind == .application else { return nil }
+        let matching = windowBindings.filter {
+            $0.matches(applicationBinding: context.currentSource)
+        }
+        if let displayID = context.currentSource.displayID,
            let sameDisplay = matching.first(where: { $0.displayID == displayID }) {
             return sameDisplay
         }
@@ -1526,20 +1631,21 @@ final class RecorderViewModel {
 
     func requestScreenAccessFromCover() {
         Task {
-            let result = await PermissionGate.requestScreenCaptureAccess()
+            let result = await coordinator.permissionGate.requestScreenCaptureAccess()
             if result.status == .needsSettings {
                 screenAccessAwaitingRestart = true
             }
             detailMessage = result.message
             refreshPermissionStatus()
+            if result.status == .granted {
+                await refreshSources()
+            }
         }
     }
 
     func requestCameraAccessFromCover() {
         Task {
-            if AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined {
-                _ = await AVCaptureDevice.requestAccess(for: .video)
-            }
+            _ = await coordinator.permissionGate.requestCameraAccess()
             syncSettings()
             refreshPermissionStatus()
         }
@@ -1547,9 +1653,7 @@ final class RecorderViewModel {
 
     func requestMicrophoneAccessFromCover() {
         Task {
-            if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
-                _ = await AVCaptureDevice.requestAccess(for: .audio)
-            }
+            _ = await coordinator.permissionGate.requestMicrophoneAccess()
             syncSettings()
             refreshPermissionStatus()
         }
@@ -1559,23 +1663,19 @@ final class RecorderViewModel {
         Task {
             let needsScreenGrant =
                 (settings.enabledSources.contains(.screen)
-                    && !settings.usesPickedScreenContent
-                    && settings.screenSourceBinding?.isConcreteSelection == true)
-                || settings.enabledSources.contains(.systemAudio)
+                    && !settings.usesPickedScreenContent)
             if needsScreenGrant, !isPersistentScreenCaptureAccessActive {
-                let result = await PermissionGate.requestScreenCaptureAccess()
+                let result = await coordinator.permissionGate.requestScreenCaptureAccess()
                 if result.status == .needsSettings {
                     screenAccessAwaitingRestart = true
                 }
             }
             if settings.enabledSources.contains(.camera),
-               !isRemoteCameraSelected,
-               AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined {
-                _ = await AVCaptureDevice.requestAccess(for: .video)
+               !isRemoteCameraSelected {
+                _ = await coordinator.permissionGate.requestCameraAccess()
             }
-            if settings.enabledSources.contains(.microphone),
-               AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
-                _ = await AVCaptureDevice.requestAccess(for: .audio)
+            if settings.enabledSources.contains(.microphone) {
+                _ = await coordinator.permissionGate.requestMicrophoneAccess()
             }
             syncSettings()
             refreshPermissionStatus()
@@ -1583,11 +1683,11 @@ final class RecorderViewModel {
     }
 
     func openCameraSettings() {
-        PermissionGate.openCameraSettings()
+        coordinator.permissionGate.openCameraSettings()
     }
 
     func openMicrophoneSettings() {
-        PermissionGate.openMicrophoneSettings()
+        coordinator.permissionGate.openMicrophoneSettings()
     }
 
     func quitAndReopen() {
@@ -1603,8 +1703,11 @@ final class RecorderViewModel {
         settings.enabledSources.contains(.screen)
             && !settings.hiddenSources.contains(.screen)
             && !settings.usesPickedScreenContent
-            && settings.screenSourceBinding?.isConcreteSelection != true
             && !coordinator.hasScreenCaptureAccess()
+    }
+
+    var screenPickActionTitle: String {
+        "Enable Screen Recording"
     }
 
     private func pickAndEnableScreenSource() {
@@ -1626,9 +1729,12 @@ final class RecorderViewModel {
 
     func applyScreenRecordingPermission() {
         Task {
-            let result = await PermissionGate.requestScreenCaptureAccess()
+            let result = await coordinator.permissionGate.requestScreenCaptureAccess()
             detailMessage = result.message
             refreshPermissionStatus()
+            if result.status == .granted {
+                await refreshSources()
+            }
         }
     }
 
@@ -1643,11 +1749,6 @@ final class RecorderViewModel {
     }
 
     func runPrimaryPermissionAction() {
-        if shouldSuggestScreenPicker {
-            pickScreen()
-            return
-        }
-
         if recordingReadiness.blockers.contains(where: { $0.source == .camera || $0.source == .microphone }) {
             requestSourcePermissions()
             return
@@ -1655,7 +1756,8 @@ final class RecorderViewModel {
 
         if recordingReadiness.blockers.contains(where: { $0.source == .screen || $0.source == .systemAudio }) {
             openScreenRecordingSettings()
-            detailMessage = "Enable Screen & System Audio Recording for BlitzRecorder, then quit and reopen it."
+            detailMessage = recordingReadiness.blockers.first?.sentence
+                ?? "Enable Screen Recording for BlitzRecorder, then quit and reopen it."
             return
         }
 
@@ -1664,7 +1766,7 @@ final class RecorderViewModel {
 
     func requestAccessibilityPermission() {
         Task {
-            let result = await PermissionGate.requestAccessibilityAccessForWindowControls()
+            let result = await coordinator.permissionGate.requestAccessibilityAccessForWindowControls()
             detailMessage = result.message
             refreshPermissionStatus()
         }
@@ -1674,11 +1776,14 @@ final class RecorderViewModel {
         if let message {
             detailMessage = message
         }
+        if coordinator.reconcilePersistentScreenAccessIfNeeded() {
+            syncSettings()
+        }
         permissionRefreshToken += 1
     }
 
     func openAccessibilitySettings() {
-        PermissionGate.openAccessibilitySettings()
+        coordinator.permissionGate.openAccessibilitySettings()
     }
 
     func selectScreenCrop() {
@@ -1693,7 +1798,7 @@ final class RecorderViewModel {
     }
 
     func openScreenRecordingSettings() {
-        PermissionGate.openScreenCaptureSettings()
+        coordinator.permissionGate.openScreenCaptureSettings()
     }
 
     func chooseOutputFolder() {
@@ -2152,7 +2257,16 @@ struct PermissionStatusRow: Identifiable, Equatable {
     let source: CaptureSource?
 
     var isGranted: Bool {
-        ["allowed", "authorized", "remote iPhone", "selected with macOS picker"].contains(status)
+        let grantedStatuses = [
+            "allowed",
+            "authorized",
+            "remote iPhone",
+            "selected source ready",
+            "session access active",
+            "full capture access active",
+            "enabled for recordings"
+        ]
+        return grantedStatuses.contains(status) || status.hasPrefix("allowed for ")
     }
 
     var level: PermissionStatusLevel {

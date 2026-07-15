@@ -247,15 +247,15 @@ final class PreviewStageViewTests: XCTestCase {
         view.sceneLayout = SceneLayout.presetLayout(.webcamFullscreen, for: .vertical)
         view.layoutSubtreeIfNeeded()
 
-        let normalCameraFrame = view.renderedCameraFrameForTesting
         view.beginCameraCropEditing()
         view.layoutSubtreeIfNeeded()
 
         let sourceFrame = view.renderedCameraFrameForTesting
         let selectionFrame = try XCTUnwrap(view.renderedSelectionFrameForTesting)
-        XCTAssertEqual(sourceFrame.height, normalCameraFrame.height, accuracy: 0.0001)
-        XCTAssertGreaterThan(sourceFrame.width, normalCameraFrame.width)
-        XCTAssertRect(selectionFrame, equals: normalCameraFrame)
+        XCTAssertGreaterThanOrEqual(sourceFrame.minX, view.bounds.minX)
+        XCTAssertLessThanOrEqual(sourceFrame.maxX, view.bounds.maxX)
+        XCTAssertGreaterThan(sourceFrame.width, selectionFrame.width)
+        XCTAssertRect(selectionFrame, equals: view.renderedCanvasFrameForTesting)
     }
 
     func testEndingCameraCropEditingRestoresFullscreenWebcamFrame() {
@@ -313,6 +313,28 @@ final class PreviewStageViewTests: XCTestCase {
         XCTAssertEqual(selectionFrame.height, view.renderedCanvasFrameForTesting.height * 0.5, accuracy: 0.0001)
         XCTAssertRect(selectionFrame, equals: normalCameraFrame)
         XCTAssertGreaterThan(sourceFrame.width, selectionFrame.width)
+    }
+
+    func testCameraCropEditingShowsFullSourceForHorizontalWebcamLeft() throws {
+        let view = PreviewStageView()
+        view.frame = NSRect(x: 0, y: 0, width: 1000, height: 700)
+        view.captureLayout = .horizontal
+        view.enabledSources = [.screen, .camera]
+        view.selectedLayer = .camera
+        view.sceneLayout = SceneLayout.presetLayout(.webcamLeft, for: .horizontal)
+        view.layoutSubtreeIfNeeded()
+
+        view.beginCameraCropEditing()
+        view.layoutSubtreeIfNeeded()
+
+        let sourceFrame = view.renderedCameraFrameForTesting
+        XCTAssertGreaterThanOrEqual(sourceFrame.minX, view.bounds.minX)
+        XCTAssertLessThanOrEqual(sourceFrame.maxX, view.bounds.maxX)
+
+        view.updateCameraCropDraft(position: CGPoint(x: -1, y: 0))
+
+        let cropFrame = try XCTUnwrap(view.renderedSelectionFrameForTesting)
+        XCTAssertEqual(cropFrame.minX, sourceFrame.minX, accuracy: 0.0001)
     }
 
     func testFullscreenScreenFitsInsidePaddedCanvasWhenPaddingIsEnabled() {

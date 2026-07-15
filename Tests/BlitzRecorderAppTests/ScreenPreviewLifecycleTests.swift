@@ -61,4 +61,57 @@ final class ScreenPreviewLifecycleTests: XCTestCase {
 
         XCTAssertEqual(action, .restart)
     }
+
+    func testWindowUnavailableUsesActionableDetailMessage() {
+        var settings = RecordingSettings()
+        settings.screenSourceBinding = ScreenSourceBinding(
+            kind: .window,
+            displayID: nil,
+            bundleIdentifier: "com.example.App",
+            applicationName: "Example",
+            processID: nil,
+            windowID: 42,
+            windowTitle: "Demo"
+        )
+
+        let message = ScreenPreviewFailureMessage.detailMessage(
+            for: RecorderError.screenSourceUnavailable("Example - Demo"),
+            settings: settings
+        )
+
+        XCTAssertTrue(message.contains("Selected window unavailable"))
+        XCTAssertTrue(message.contains("Example - Demo"))
+        XCTAssertTrue(message.contains("is not available for capture"))
+    }
+
+    func testPreviewFailureDetailKeepsUnderlyingReason() {
+        var settings = RecordingSettings()
+        settings.screenSourceBinding = ScreenSourceBinding(
+            kind: .application,
+            displayID: nil,
+            bundleIdentifier: "com.example.App",
+            applicationName: "Example",
+            processID: 12,
+            windowID: nil,
+            windowTitle: nil
+        )
+
+        let message = ScreenPreviewFailureMessage.detailMessage(
+            for: RecorderError.screenSourceUnavailable("Example"),
+            settings: settings
+        )
+
+        XCTAssertTrue(message.contains("Selected app unavailable"))
+        XCTAssertTrue(message.contains("Example"))
+        XCTAssertTrue(message.contains("is not available for capture"))
+    }
+
+    func testScreenCapturePermissionUsesSpecificDetailMessage() {
+        let message = ScreenPreviewFailureMessage.detailMessage(
+            for: RecorderError.screenCapturePermissionRequired,
+            settings: RecordingSettings()
+        )
+
+        XCTAssertTrue(message.contains("Screen Recording permission required"))
+    }
 }

@@ -11,7 +11,7 @@ struct CameraCropControls: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             if vm.isCameraCropModeEnabled {
                 cropActiveNotice
             } else {
@@ -19,23 +19,65 @@ struct CameraCropControls: View {
                     RemoteCameraOrientationControl(vm: vm)
                 }
 
-                CameraInsetFrameControls(vm: vm)
+                if vm.isCameraInsetLayout {
+                    CameraInsetFrameControls(vm: vm)
+                }
 
-                CameraInspectorSliderRow(
-                    title: "Zoom",
-                    value: Binding(
-                        get: { cropZoom },
-                        set: { vm.setCameraCropZoom(CGFloat($0)) }
-                    ),
-                    range: 0...0.75
-                )
-                .help("Zoom into the camera image")
+                cameraImageGroup
 
-                cropActions
+                if vm.isCameraInsetLayout {
+                    styleGroup
+                }
             }
         }
         .disabled(disabled)
         .opacity(disabled ? 0.6 : 1)
+    }
+
+    private var cameraImageGroup: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            BlitzUI.sectionLabel("Camera image", icon: "camera")
+
+            CameraInspectorSliderRow(
+                title: "Zoom",
+                value: Binding(
+                    get: { cropZoom },
+                    set: { vm.setCameraCropZoom(CGFloat($0)) }
+                ),
+                range: 0...0.75
+            )
+            .help("Zoom into the camera image")
+
+            cropActions
+        }
+    }
+
+    private var styleGroup: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            BlitzUI.sectionLabel("Style", icon: "wand.and.stars")
+            Toggle(isOn: shadowSelection) {
+                Label("Shadow", systemImage: "square.stack.3d.down.right")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .tint(BlitzUI.mint)
+            .help("Add a soft shadow under the camera")
+        }
+    }
+
+    private var contentModeSelection: Binding<CameraContentMode> {
+        Binding(
+            get: { vm.settings.cameraContentMode },
+            set: { vm.setCameraContentMode($0) }
+        )
+    }
+
+    private var shadowSelection: Binding<Bool> {
+        Binding(
+            get: { vm.settings.cameraShadowEnabled },
+            set: { vm.setCameraShadowEnabled($0) }
+        )
     }
 
     private var cropActiveNotice: some View {
@@ -101,62 +143,39 @@ struct CameraInsetFrameControls: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            CameraInspectorRow(title: "Position") {
-                Picker("Position", selection: alignmentSelection) {
-                    ForEach(CameraInsetAlignment.allCases, id: \.self) { alignment in
-                        Text(alignment.displayName).tag(alignment)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .controlSize(.small)
-            }
+        VStack(alignment: .leading, spacing: 14) {
+            CameraDiagramRow(
+                title: "Placement",
+                icon: "rectangle.inset.bottomleft.filled",
+                options: CameraInsetAlignment.allCases,
+                selection: alignmentSelection,
+                label: { $0.displayName },
+                draw: positionDraw
+            )
             .help("Place the camera in the bottom left or bottom right corner")
 
-            CameraInspectorRow(title: "Shape") {
-                Picker("Shape", selection: shapeSelection) {
-                    ForEach(CameraInsetShape.allCases, id: \.self) { shape in
-                        Text(shape.displayName).tag(shape)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .controlSize(.small)
-            }
-            .help("Camera frame shape")
+            VStack(alignment: .leading, spacing: 8) {
+                CameraDiagramRow(
+                    title: "Frame",
+                    icon: "rectangle.portrait",
+                    options: CameraInsetShape.allCases,
+                    selection: shapeSelection,
+                    label: { $0.displayName },
+                    draw: shapeDraw
+                )
+                .help("Camera frame shape")
 
-            CameraInspectorSliderRow(
-                title: "Size",
-                value: Binding(
-                    get: { vm.cameraInsetSize },
-                    set: { vm.setCameraInsetSize($0) }
-                ),
-                range: vm.cameraInsetSizeRange,
-                step: 0.005
-            )
-            .help("Camera frame size — the frame keeps the camera's real aspect ratio")
-
-            CameraInspectorRow(title: "Image") {
-                Picker("Image", selection: contentModeSelection) {
-                    ForEach(CameraContentMode.allCases, id: \.self) { mode in
-                        Text(mode.displayName).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .controlSize(.small)
+                CameraInspectorSliderRow(
+                    title: "Size",
+                    value: Binding(
+                        get: { vm.cameraInsetSize },
+                        set: { vm.setCameraInsetSize($0) }
+                    ),
+                    range: vm.cameraInsetSizeRange,
+                    step: 0.005
+                )
+                .help("Camera frame size — the frame keeps the camera's real aspect ratio")
             }
-            .help("Fill the frame edge to edge, or fit the whole camera image")
-
-            Toggle(isOn: shadowSelection) {
-                Label("Shadow", systemImage: "square.stack.3d.down.right")
-                    .font(.system(size: 12, weight: .semibold))
-            }
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-            .tint(BlitzUI.mint)
-            .help("Add a soft shadow under the camera")
         }
         .disabled(disabled)
         .opacity(disabled ? 0.6 : 1)
@@ -173,20 +192,6 @@ struct CameraInsetFrameControls: View {
         Binding(
             get: { vm.cameraInsetShape },
             set: { vm.setCameraInsetShape($0) }
-        )
-    }
-
-    private var contentModeSelection: Binding<CameraContentMode> {
-        Binding(
-            get: { vm.settings.cameraContentMode },
-            set: { vm.setCameraContentMode($0) }
-        )
-    }
-
-    private var shadowSelection: Binding<Bool> {
-        Binding(
-            get: { vm.settings.cameraShadowEnabled },
-            set: { vm.setCameraShadowEnabled($0) }
         )
     }
 }
@@ -231,6 +236,112 @@ struct CameraInspectorSliderRow: View {
                 .frame(width: 34, alignment: .trailing)
         }
     }
+}
+
+struct CameraDiagramPicker<Value: Hashable>: View {
+    let options: [Value]
+    @Binding var selection: Value
+    let label: (Value) -> String
+    let draw: (Value, inout GraphicsContext, CGSize, Bool) -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(options, id: \.self) { value in
+                let isSelected = value == selection
+                Button {
+                    selection = value
+                } label: {
+                    VStack(spacing: 8) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(isSelected ? BlitzUI.mint.opacity(0.16) : BlitzUI.controlFill)
+                            Canvas { ctx, size in
+                                var c = ctx
+                                draw(value, &c, size, isSelected)
+                            }
+                            .frame(width: 30, height: 30)
+                        }
+                        .frame(width: 30, height: 30)
+
+                        Text(label(value))
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(isSelected ? .white.opacity(0.92) : .white.opacity(0.64))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.82)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 62)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .blitzSelectedSurface(isSelected: isSelected)
+                .pointingHandCursor()
+            }
+        }
+    }
+}
+
+struct CameraDiagramRow<Value: Hashable>: View {
+    let title: String
+    let icon: String
+    let options: [Value]
+    @Binding var selection: Value
+    let label: (Value) -> String
+    let draw: (Value, inout GraphicsContext, CGSize, Bool) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            BlitzUI.sectionLabel(title, icon: icon)
+            CameraDiagramPicker(
+                options: options,
+                selection: $selection,
+                label: label,
+                draw: draw
+            )
+        }
+    }
+}
+
+private enum CamDiagram {
+    /// The recording canvas is portrait 9:16 (shorts). Every diagram draws this phone-shaped frame.
+    static func canvasRect(_ s: CGSize) -> CGRect {
+        let h = s.height - 8
+        let w = h * 9 / 16
+        return CGRect(x: (s.width - w) / 2, y: (s.height - h) / 2, width: w, height: h)
+    }
+
+    static func stroke(_ c: GraphicsContext, _ r: CGRect, _ rad: CGFloat, _ color: Color, _ lw: CGFloat = 1) {
+        c.stroke(Path(roundedRect: r, cornerRadius: rad), with: .color(color), lineWidth: lw)
+    }
+
+    static func fill(_ c: GraphicsContext, _ r: CGRect, _ rad: CGFloat, _ color: Color) {
+        c.fill(Path(roundedRect: r, cornerRadius: rad), with: .color(color))
+    }
+}
+
+private func positionDraw(_ v: CameraInsetAlignment, _ c: inout GraphicsContext, _ s: CGSize, _ sel: Bool) {
+    let f = CamDiagram.canvasRect(s)
+    CamDiagram.fill(c, f, 3, .white.opacity(0.05))
+    CamDiagram.stroke(c, f, 3, .white.opacity(sel ? 0.4 : 0.2))
+    let cw = f.width * 0.62, ch = cw * 9 / 16, pad: CGFloat = 2
+    let x = (v == .bottomLeft) ? f.minX + pad : f.maxX - pad - cw
+    let chip = CGRect(x: x, y: f.maxY - pad - ch, width: cw, height: ch)
+    CamDiagram.fill(c, chip, 2, sel ? BlitzUI.mint : .white.opacity(0.42))
+}
+
+private func shapeDraw(_ v: CameraInsetShape, _ c: inout GraphicsContext, _ s: CGSize, _ sel: Bool) {
+    let f = CamDiagram.canvasRect(s)
+    CamDiagram.fill(c, f, 3, .white.opacity(0.05))
+    CamDiagram.stroke(c, f, 3, .white.opacity(0.2))
+    let chip: CGRect
+    let pad: CGFloat = 2
+    if v == .landscape {
+        let w = f.width * 0.78, h = w * 9 / 16
+        chip = CGRect(x: f.midX - w / 2, y: f.maxY - pad - h, width: w, height: h)
+    } else {
+        let h = f.height * 0.5, w = h * 9 / 16
+        chip = CGRect(x: f.midX - w / 2, y: f.maxY - pad - h, width: w, height: h)
+    }
+    CamDiagram.fill(c, chip, 2, sel ? BlitzUI.mint : .white.opacity(0.42))
 }
 
 struct RemoteCameraOrientationControl: View {
@@ -485,4 +596,36 @@ private struct SafeZonePopover: View {
         .tint(isSelected ? mint.opacity(0.22) : .clear)
         .pointingHandCursor()
     }
+}
+
+#Preview("Camera diagram tiles") {
+    struct DiagramPreview: View {
+        @State private var alignment: CameraInsetAlignment = .bottomRight
+        @State private var shape: CameraInsetShape = .landscape
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 14) {
+                CameraDiagramRow(
+                    title: "Placement",
+                    icon: "rectangle.inset.bottomleft.filled",
+                    options: CameraInsetAlignment.allCases,
+                    selection: $alignment,
+                    label: { $0.displayName },
+                    draw: positionDraw
+                )
+                CameraDiagramRow(
+                    title: "Frame",
+                    icon: "rectangle.portrait",
+                    options: CameraInsetShape.allCases,
+                    selection: $shape,
+                    label: { $0.displayName },
+                    draw: shapeDraw
+                )
+            }
+            .padding(16)
+            .frame(width: 268)
+            .background(Color(red: 0.035, green: 0.035, blue: 0.043))
+        }
+    }
+    return DiagramPreview().preferredColorScheme(.dark)
 }

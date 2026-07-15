@@ -30,6 +30,7 @@ enum RecordingSettingsStore {
         static let outputDirectoryPath = "recording.outputDirectoryPath"
         static let outputDirectoryBookmark = "recording.outputDirectoryBookmark"
         static let screenCrop = "screen.crop"
+        static let screenWindowZoom = "screen.windowZoom"
         static let cameraCropAmount = "camera.cropAmount"
         static let cameraCropPosition = "camera.cropPosition"
         static let canvasBackgroundStyle = "scene.canvasBackgroundStyle"
@@ -139,6 +140,11 @@ enum RecordingSettingsStore {
         settings.trustedRemoteCameraServiceIDs = Set(defaults.stringArray(forKey: Key.trustedRemoteCameraServiceIDs) ?? [])
         settings.remoteCameraSettingsByServiceID = remoteCameraSettingsByServiceID(defaults: defaults)
         settings.screenCrop = rect(for: Key.screenCrop, defaults: defaults)
+        if defaults.object(forKey: Key.screenWindowZoom) != nil {
+            settings.screenWindowZoom = WindowZoomGeometry.clampedZoom(
+                CGFloat(defaults.double(forKey: Key.screenWindowZoom))
+            )
+        }
         settings.cameraCropAmount = point(for: Key.cameraCropAmount, defaults: defaults) ?? .zero
         settings.cameraCropPosition = point(for: Key.cameraCropPosition, defaults: defaults) ?? .zero
         if let rawCanvasBackgroundStyle = defaults.string(forKey: Key.canvasBackgroundStyle),
@@ -306,6 +312,10 @@ enum RecordingSettingsStore {
         } else {
             defaults.removeObject(forKey: Key.screenCrop)
         }
+        defaults.set(
+            WindowZoomGeometry.clampedZoom(settings.screenWindowZoom),
+            forKey: Key.screenWindowZoom
+        )
         defaults.set(string(from: settings.cameraCropAmount), forKey: Key.cameraCropAmount)
         defaults.set(string(from: settings.cameraCropPosition), forKey: Key.cameraCropPosition)
         defaults.set(settings.canvasBackgroundStyle.rawValue, forKey: Key.canvasBackgroundStyle)

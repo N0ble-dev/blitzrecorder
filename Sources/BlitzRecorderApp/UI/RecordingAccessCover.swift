@@ -203,8 +203,10 @@ struct RecordingAccessCover: View {
         if !row.isActive { return .inactive }
         if row.isGranted { return .granted }
         switch source {
-        case .screen, .systemAudio:
+        case .screen:
             return vm.screenAccessAwaitingRestart ? .quitReopen : .allow
+        case .systemAudio:
+            return vm.screenAccessAwaitingRestart ? .quitReopen : .openSettings
         case .camera, .microphone:
             // notDetermined can be resolved with an in-app prompt; denied/restricted needs Settings.
             return row.status == "not determined" ? .allow : .openSettings

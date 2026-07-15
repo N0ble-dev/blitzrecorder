@@ -154,6 +154,26 @@ final class RecordingSettingsStoreTests: XCTestCase {
         XCTAssertFalse(loaded.usesPickedScreenContent)
     }
 
+    func testPersistsAndClampsScreenWindowZoom() {
+        let defaults = temporaryDefaults()
+        var settings = RecordingSettings()
+        settings.screenWindowZoom = 1.25
+
+        RecordingSettingsStore.save(settings, defaults: defaults)
+        XCTAssertEqual(
+            RecordingSettingsStore.load(defaults: defaults).screenWindowZoom,
+            1.25,
+            accuracy: 0.0001
+        )
+
+        defaults.set(4, forKey: "screen.windowZoom")
+        XCTAssertEqual(
+            RecordingSettingsStore.load(defaults: defaults).screenWindowZoom,
+            WindowZoomGeometry.maximumZoom,
+            accuracy: 0.0001
+        )
+    }
+
     func testSaveSourceFilesDefaultsOnAndIgnoresLegacyOptOut() {
         let defaults = temporaryDefaults()
 

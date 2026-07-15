@@ -1,45 +1,60 @@
 import AppKit
+import Observation
 import SwiftUI
 
-// MARK: - Settings window (⌘,)
-//
-// Native macOS preferences window built the way Apple recommends: an
-// `NSTabViewController` with `tabStyle = .toolbar`. That gives the Mail/Safari/Xcode
-// `.preference` toolbar chrome, tab selection, animated transitions, and automatic
-// resize-to-fit for free — no hand-rolled toolbar/delegate/resize code.
-//
-// Appearance is pinned dark via the standard `NSAppearance` API (Final Cut / Logic
-// style) rather than hardcoded colors, so the toolbar and standard controls still
-// adopt Tahoe's Liquid Glass. Panes currently reuse the existing page views; their
-// *content* gets rebuilt on native `Form`/system materials in a follow-up slice.
-
-/// The four Settings panes, in the order they are added to the toolbar. Each removed
-/// app-rail destination maps to one of these so SwiftUI views can route to a specific
-/// pane (rule #5: Export -> recording, iPhone -> devices, Access -> permissions,
-/// Plan -> account).
-enum SettingsPane: Int, CaseIterable {
+enum SettingsPane: Int, CaseIterable, Identifiable {
     case recording
     case devices
     case permissions
     case account
+
+    var id: Int { rawValue }
+
+    var title: String {
+        switch self {
+        case .recording: return "Recording"
+        case .devices: return "Devices"
+        case .permissions: return "Access"
+        case .account: return "Account"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .recording: return "slider.horizontal.3"
+        case .devices: return "iphone.gen3"
+        case .permissions: return "lock.shield"
+        case .account: return "person.crop.circle"
+        }
+    }
+}
+
+@MainActor
+@Observable
+private final class SettingsNavigation {
+    let viewModel: RecorderViewModel
+    var selectedPane: SettingsPane = .recording
+
+    init(viewModel: RecorderViewModel) {
+        self.viewModel = viewModel
+    }
 }
 
 @MainActor
 final class SettingsWindowController: NSWindowController {
-    private let tabController: SettingsTabController
+    private let navigation: SettingsNavigation
 
     init(viewModel: RecorderViewModel) {
-        tabController = SettingsTabController(viewModel: viewModel)
-        let window = NSWindow(contentViewController: tabController)
+        navigation = SettingsNavigation(viewModel: viewModel)
+        let rootView = SettingsRootView(navigation: navigation)
+            .preferredColorScheme(.dark)
+        let window = NSWindow(contentViewController: NSHostingController(rootView: rootView))
         window.title = "Settings"
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
         window.appearance = NSAppearance(named: .darkAqua)
-        window.toolbarStyle = .preference
-        // Fixed-size preferences window: not user-resizable (content scrolls instead of
-        // letting the window shrink to nothing). Native prefs-window convention.
         window.styleMask.remove(.resizable)
-        window.setContentSize(SettingsTabController.contentSize)
+        window.setContentSize(SettingsRootView.contentSize)
         window.center()
         super.init(window: window)
     }
@@ -48,96 +63,114 @@ final class SettingsWindowController: NSWindowController {
         fatalError("init(coder:) has not been implemented")
     }
 
-    /// Selects a specific pane before showing. Panes are added in `SettingsPane`'s
-    /// declaration order, so the raw value is the tab index.
     func select(_ pane: SettingsPane) {
-        let index = pane.rawValue
-        guard index >= 0, index < tabController.tabViewItems.count else { return }
-        tabController.selectedTabViewItemIndex = index
+        navigation.selectedPane = pane
     }
 }
 
-@MainActor
-private final class SettingsTabController: NSTabViewController {
-    private let viewModel: RecorderViewModel
+private struct SettingsRootView: View {
+    static let contentSize = NSSize(width: 1_040, height: 720)
 
-    /// One fixed content size shared by every pane so the window never resizes or
-    /// jumps when switching tabs. Panes whose content is taller than this scroll
-    /// inside the fixed frame instead of resizing the window.
-    static let contentSize = NSSize(width: 860, height: 720)
-
-    init(viewModel: RecorderViewModel) {
-        self.viewModel = viewModel
-        super.init(nibName: nil, bundle: nil)
-        tabStyle = .toolbar
-        transitionOptions = []  // no crossfade — instant tab switching
-        // `scrolls: false` for pages that already host their own ScrollView
-        // (RemoteCameraPage, BlitzReelsCreatorPage) so we don't double-wrap; the
-        // others get a ScrollView here so tall content scrolls instead of clipping.
-        addPane(title: "Recording", symbol: "slider.horizontal.3", scrolls: true) {
-            RecordingSettingsPage(vm: viewModel)
-        }
-        addPane(title: "Devices", symbol: "iphone.gen3", scrolls: false) {
-            RemoteCameraPage(vm: viewModel)
-        }
-        addPane(title: "Permissions", symbol: "lock.shield", scrolls: true) {
-            PermissionsPage(vm: viewModel)
-        }
-        addPane(title: "Account", symbol: "person.crop.circle", scrolls: false) {
-            BlitzReelsCreatorPage(access: viewModel.accessController)
-        }
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    private func addPane<Content: View>(
-        title: String,
-        symbol: String,
-        scrolls: Bool,
-        @ViewBuilder content: () -> Content
-    ) {
-        let size = Self.contentSize
-        let host = NSHostingController(
-            rootView: PaneContainer(scrolls: scrolls, size: size, content: content)
-                .preferredColorScheme(.dark)
-        )
-        host.title = title
-        host.preferredContentSize = size
-
-        let item = NSTabViewItem(viewController: host)
-        item.label = title
-        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
-        addTabViewItem(item)
-    }
-}
-
-/// Pins a Settings pane to the shared fixed size with consistent top-leading
-/// alignment. Pages that don't already scroll are wrapped in a `ScrollView`;
-/// pages that scroll themselves just receive the fixed frame.
-private struct PaneContainer<Content: View>: View {
-    let scrolls: Bool
-    let size: NSSize
-    @ViewBuilder let content: Content
-
-    init(scrolls: Bool, size: NSSize, @ViewBuilder content: () -> Content) {
-        self.scrolls = scrolls
-        self.size = size
-        self.content = content()
-    }
+    @Bindable var navigation: SettingsNavigation
 
     var body: some View {
-        Group {
-            if scrolls {
-                ScrollView {
-                    content
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                }
-            } else {
-                content
-            }
+        HStack(spacing: 0) {
+            sidebar
+
+            Divider()
+                .overlay(Color.white.opacity(0.06))
+
+            detail
         }
-        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .frame(width: Self.contentSize.width, height: Self.contentSize.height)
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("SETTINGS")
+                .font(.system(size: 10, weight: .heavy))
+                .tracking(0.8)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
+
+            ForEach(SettingsPane.allCases) { pane in
+                sidebarButton(pane)
+            }
+
+            Spacer(minLength: 24)
+
+            Text("Changes save automatically")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 10)
+        }
+        .padding(12)
+        .padding(.top, 8)
+        .frame(width: 178)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .background(.thinMaterial)
+    }
+
+    private func sidebarButton(_ pane: SettingsPane) -> some View {
+        let isSelected = navigation.selectedPane == pane
+        let issueCount = pane == .permissions
+            ? navigation.viewModel.recordingReadiness.blockers.count
+            : 0
+
+        return Button {
+            navigation.selectedPane = pane
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: pane.symbolName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(isSelected ? BlitzUI.mint : .secondary)
+                    .frame(width: 18)
+
+                Text(pane.title)
+                    .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
+                    .foregroundStyle(.primary)
+
+                Spacer(minLength: 0)
+
+                if issueCount > 0 {
+                    Text("\(issueCount)")
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .foregroundStyle(.black.opacity(0.8))
+                        .frame(minWidth: 17, minHeight: 17)
+                        .background(BlitzUI.warning, in: .circle)
+                }
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 36)
+            .background(
+                isSelected ? Color.white.opacity(0.10) : .clear,
+                in: .rect(cornerRadius: 8)
+            )
+            .contentShape(.rect(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        switch navigation.selectedPane {
+        case .recording:
+            ScrollView {
+                RecordingSettingsPage(vm: navigation.viewModel)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+        case .devices:
+            RemoteCameraPage(vm: navigation.viewModel)
+        case .permissions:
+            ScrollView {
+                PermissionsPage(vm: navigation.viewModel)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+        case .account:
+            BlitzReelsCreatorPage(access: navigation.viewModel.accessController)
+        }
     }
 }

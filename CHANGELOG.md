@@ -6,8 +6,10 @@ This project uses GitHub Releases for downloadable macOS builds. Release tags us
 
 ## Unreleased
 
-- Open-source repository preparation.
-- Universal macOS DMG release automation.
-- iOS TestFlight and App Store workflow automation.
-- Website shows the latest release version and links the macOS DMG directly from GitHub Releases.
-- Free export allowance increased from 3 to 10.
+## 0.3.0 - 2026-07-15
+
+- Redesigned the recording studio and editor around a shared native control system.
+- Added synchronized full-timeline playback for screen, camera, microphone, and system audio.
+- Improved recording startup, finalization, source selection, permission recovery, and error reporting.
+- Fixed editor refresh, crop, frame-ratio, scene resizing, and export placement behavior.
+- Added a sandbox-safe DMG packaging fallback for current macOS releases.

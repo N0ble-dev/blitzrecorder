@@ -100,6 +100,33 @@ final class TakeRecordingRuntimeTests: XCTestCase {
         XCTAssertEqual(summary.completions[.camera], .wrote(take.cameraURL))
     }
 
+    func testSourceFileTakeCapturesSharedReadyPointAndAudioClockOrigin() async throws {
+        var settings = RecordingSettings()
+        settings.enabledSources = [.microphone]
+        let runtime = TakeRecordingRuntime()
+        let take = makeTake()
+        let microphone = TimedMicrophoneCaptureRecorder()
+
+        _ = try await runtime.startSourceFileTake(
+            take: take,
+            settings: settings,
+            pickedScreenFilter: nil,
+            prerollSeconds: 0,
+            screenRecorder: NoopScreenCaptureRecorder(),
+            cameraRecorder: NoopCameraCaptureRecorder(),
+            audioRecorder: microphone,
+            systemAudioRecorder: NoopSystemAudioCaptureRecorder(),
+            prerollHandler: nil
+        )
+        let outcome = try await runtime.stop()
+
+        guard case .sourceFiles(let summary) = outcome else {
+            return XCTFail("Expected source file summary")
+        }
+        XCTAssertGreaterThan(summary.timelineTrimOffset.seconds, 0.03)
+        XCTAssertEqual(summary.sourceTimelineOffsets[.microphone]?.seconds ?? -1, 0.02, accuracy: 0.0001)
+    }
+
     func testTakeStartPlanKeepsLocalCameraInLiveCompositorPath() {
         var settings = RecordingSettings()
         settings.enabledSources = [.screen, .camera]
@@ -183,6 +210,18 @@ private final class NoopRemoteCameraCaptureRecorder: RemoteCameraCaptureRecordin
 
 private final class NoopMicrophoneCaptureRecorder: MicrophoneCaptureRecording {
     func start(url: URL, settings: RecordingSettings, timelineStartTime: CMTime?) async throws {}
+    func pause() {}
+    func resume() {}
+    func stop() async throws -> MediaWriterCompletion { .wrote() }
+}
+
+private final class TimedMicrophoneCaptureRecorder: MicrophoneCaptureRecording {
+    let recordingTimelineOffset = CMTime(seconds: 0.02, preferredTimescale: 600)
+
+    func start(url: URL, settings: RecordingSettings, timelineStartTime: CMTime?) async throws {
+        try await Task.sleep(for: .milliseconds(50))
+    }
+
     func pause() {}
     func resume() {}
     func stop() async throws -> MediaWriterCompletion { .wrote() }

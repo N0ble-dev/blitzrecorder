@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreMedia
 import Foundation
 
 struct SourceTakeManifest: Codable, Equatable {
@@ -96,6 +97,8 @@ struct RecordingProject: Codable, Equatable {
         let enabledSources: [String]
         let sceneLayout: SceneLayoutSnapshot
         let screenSourceGeometry: ScreenSourceSnapshot
+        let screenCropAmount: PointValue?
+        let screenCropPosition: PointValue?
         let cameraCropAmount: PointValue
         let cameraCropPosition: PointValue
         let canvasBackgroundStyle: String
@@ -110,6 +113,8 @@ struct RecordingProject: Codable, Equatable {
             self.enabledSources = scene.enabledSources.map(\.rawValue).sorted()
             self.sceneLayout = SceneLayoutSnapshot(scene.sceneLayout)
             self.screenSourceGeometry = ScreenSourceSnapshot(scene.screenSourceGeometry)
+            self.screenCropAmount = PointValue(scene.screenCropAmount)
+            self.screenCropPosition = PointValue(scene.screenCropPosition)
             self.cameraCropAmount = PointValue(scene.cameraCropAmount)
             self.cameraCropPosition = PointValue(scene.cameraCropPosition)
             self.canvasBackgroundStyle = scene.canvasBackgroundStyle.rawValue
@@ -221,6 +226,8 @@ struct RecordingProject: Codable, Equatable {
     let projectPath: String
     let takeDirectoryPath: String
     let finalVideoPath: String?
+    let timelineTrimOffsetSeconds: Double
+    let sourceTimelineOffsetSeconds: [String: Double]
     let settings: SettingsSnapshot
     let sources: [SourceFile]
     let sceneEvents: [SceneEventSnapshot]
@@ -236,6 +243,8 @@ struct RecordingProject: Codable, Equatable {
         case projectPath
         case takeDirectoryPath
         case finalVideoPath
+        case timelineTrimOffsetSeconds
+        case sourceTimelineOffsetSeconds
         case settings
         case sources
         case sceneEvents
@@ -256,7 +265,9 @@ struct RecordingProject: Codable, Equatable {
         sources: [SourceFile],
         sceneEvents: [SceneEventSnapshot],
         chapters: [ChapterSnapshot] = [],
-        editorTimeline: TimelineSnapshot = .empty
+        editorTimeline: TimelineSnapshot = .empty,
+        timelineTrimOffsetSeconds: Double = 0,
+        sourceTimelineOffsetSeconds: [String: Double] = [:]
     ) {
         self.version = version
         self.id = id
@@ -266,6 +277,8 @@ struct RecordingProject: Codable, Equatable {
         self.projectPath = projectPath
         self.takeDirectoryPath = takeDirectoryPath
         self.finalVideoPath = finalVideoPath
+        self.timelineTrimOffsetSeconds = timelineTrimOffsetSeconds
+        self.sourceTimelineOffsetSeconds = sourceTimelineOffsetSeconds
         self.settings = settings
         self.sources = sources
         self.sceneEvents = sceneEvents
@@ -283,6 +296,14 @@ struct RecordingProject: Codable, Equatable {
         self.projectPath = try container.decode(String.self, forKey: .projectPath)
         self.takeDirectoryPath = try container.decode(String.self, forKey: .takeDirectoryPath)
         self.finalVideoPath = try container.decodeIfPresent(String.self, forKey: .finalVideoPath)
+        self.timelineTrimOffsetSeconds = try container.decodeIfPresent(
+            Double.self,
+            forKey: .timelineTrimOffsetSeconds
+        ) ?? 0
+        self.sourceTimelineOffsetSeconds = try container.decodeIfPresent(
+            [String: Double].self,
+            forKey: .sourceTimelineOffsetSeconds
+        ) ?? [:]
         self.settings = try container.decode(SettingsSnapshot.self, forKey: .settings)
         self.sources = try container.decode([SourceFile].self, forKey: .sources)
         self.sceneEvents = try container.decode([SceneEventSnapshot].self, forKey: .sceneEvents)
@@ -382,6 +403,8 @@ private extension RecordingScene {
                 normalizedCrop: snapshot.screenSourceGeometry.normalizedCrop.map(CGRect.init),
                 sourceAspectRatio: snapshot.screenSourceGeometry.sourceAspectRatio.map { CGFloat($0) }
             ),
+            screenCropAmount: snapshot.screenCropAmount.map(CGPoint.init) ?? .zero,
+            screenCropPosition: snapshot.screenCropPosition.map(CGPoint.init) ?? .zero,
             cameraCropAmount: CGPoint(snapshot.cameraCropAmount),
             cameraCropPosition: CGPoint(snapshot.cameraCropPosition),
             canvasBackgroundStyle: CanvasBackgroundStyle(rawValue: snapshot.canvasBackgroundStyle) ?? .black,
@@ -664,7 +687,11 @@ struct TakeFileStore {
             sources: projectSourceFiles(for: take),
             sceneEvents: sceneEvents.map(RecordingProject.SceneEventSnapshot.init),
             chapters: chapters,
-            editorTimeline: editorTimeline
+            editorTimeline: editorTimeline,
+            timelineTrimOffsetSeconds: max(0, take.timelineTrimOffset.seconds),
+            sourceTimelineOffsetSeconds: Dictionary(uniqueKeysWithValues: take.sourceTimelineOffsets.map {
+                ($0.key.rawValue, max(0, $0.value.seconds))
+            })
         )
 
         let encoder = JSONEncoder()
@@ -709,7 +736,19 @@ struct TakeFileStore {
             transcriptURL: sourceURLByRole["transcript"] ?? scratchDirectory.appendingPathComponent("transcript.txt"),
             finalVideoURL: finalVideoURL(slug: project.title, settings: settings, outputFormat: outputFormat),
             outputVideoFormat: outputFormat,
-            titleSlug: project.title
+            titleSlug: project.title,
+            timelineTrimOffset: CMTime(
+                seconds: max(0, project.timelineTrimOffsetSeconds),
+                preferredTimescale: 600
+            ),
+            sourceTimelineOffsets: Dictionary(uniqueKeysWithValues: project.sourceTimelineOffsetSeconds.compactMap {
+                key, seconds in
+                guard let source = CaptureSource(rawValue: key) else { return nil }
+                return (
+                    source,
+                    CMTime(seconds: max(0, seconds), preferredTimescale: 600)
+                )
+            })
         )
     }
 

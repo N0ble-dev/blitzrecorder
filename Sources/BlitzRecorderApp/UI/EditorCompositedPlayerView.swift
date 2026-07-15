@@ -1,0 +1,244 @@
+import AppKit
+import AVFoundation
+import QuartzCore
+import SwiftUI
+
+@MainActor
+struct EditorCompositedPlayer: NSViewRepresentable {
+    let controller: EditorPlaybackController
+    let renderSize: CGSize
+
+    func makeNSView(context: Context) -> EditorCompositedPlayerView {
+        let view = EditorCompositedPlayerView()
+        view.controller = controller
+        view.configure(renderSize: renderSize)
+        return view
+    }
+
+    func updateNSView(_ nsView: EditorCompositedPlayerView, context: Context) {
+        nsView.controller = controller
+        nsView.configure(renderSize: renderSize)
+        nsView.refresh()
+    }
+}
+
+@MainActor
+final class EditorCompositedPlayerView: NSView {
+    private let canvasLayer = CALayer()
+    private let backgroundLayer = CALayer()
+
+    private struct SourceLayers {
+        let clip = CALayer()
+        let shadowHost = CALayer()
+        let playerLayer = AVPlayerLayer()
+    }
+
+    private var sourceLayers: [SceneLayerKind: SourceLayers] = [:]
+    private var renderSize: CGSize = .zero
+    private var renderedBackgroundKey: (style: CanvasBackgroundStyle, width: Int, height: Int)?
+
+    weak var controller: EditorPlaybackController?
+    private var displayLink: CADisplayLink?
+
+    override var mouseDownCanMoveWindow: Bool { false }
+    override var acceptsFirstResponder: Bool { false }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.cgColor
+        canvasLayer.isGeometryFlipped = true
+        canvasLayer.masksToBounds = false
+        canvasLayer.actions = disabledActions
+        backgroundLayer.actions = disabledActions
+        backgroundLayer.contentsGravity = .resize
+        backgroundLayer.masksToBounds = true
+        canvasLayer.addSublayer(backgroundLayer)
+        layer?.addSublayer(canvasLayer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    private var disabledActions: [String: any CAAction] {
+        ["frame": NSNull(), "bounds": NSNull(), "position": NSNull(), "contents": NSNull(), "path": NSNull()]
+    }
+
+    func configure(renderSize: CGSize) {
+        self.renderSize = renderSize
+        needsLayout = true
+    }
+
+    func startDisplayLink() {
+        guard displayLink == nil else { return }
+        let link = displayLink(target: self, selector: #selector(tick))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    func stopDisplayLink() {
+        displayLink?.invalidate()
+        displayLink = nil
+    }
+
+    @objc private func tick() {
+        refresh()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { startDisplayLink() } else { stopDisplayLink() }
+    }
+
+    override func layout() {
+        super.layout()
+        refresh()
+    }
+
+    private func aspectFitCanvasFrame() -> CGRect {
+        guard renderSize.width > 0, renderSize.height > 0, bounds.width > 0, bounds.height > 0 else {
+            return bounds
+        }
+        let scale = min(bounds.width / renderSize.width, bounds.height / renderSize.height)
+        let size = CGSize(width: renderSize.width * scale, height: renderSize.height * scale)
+        return CGRect(
+            x: bounds.midX - size.width / 2,
+            y: bounds.midY - size.height / 2,
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    func refresh() {
+        guard let controller, controller.isReady, renderSize.width > 0, renderSize.height > 0 else { return }
+        let canvasFrame = aspectFitCanvasFrame()
+        guard canvasFrame.width > 0 else { return }
+        let scale = canvasFrame.width / renderSize.width
+
+        let time = controller.displayTime()
+        guard let scene = controller.scene(at: time) else { return }
+        let geometry = SceneRenderGeometry(
+            canvas: CGRect(origin: .zero, size: renderSize),
+            scene: scene,
+            origin: .upperLeft
+        )
+        let aspectRatios = controller.sourceAspectRatios
+        let hidden = controller.hiddenKinds
+        let activeOrder = geometry.activeLayerOrder.filter { !hidden.contains($0) }
+
+        performWithoutUIAnimation {
+            canvasLayer.frame = canvasFrame
+            canvasLayer.bounds = CGRect(origin: .zero, size: canvasFrame.size)
+            updateBackground(scene: scene, canvasSize: canvasFrame.size)
+
+            var zIndex: CGFloat = 1
+            for kind in [SceneLayerKind.screen, .camera] {
+                guard let player = controller.videoPlayer(for: kind) else {
+                    sourceLayers[kind]?.shadowHost.isHidden = true
+                    continue
+                }
+                let layers = sourceLayers[kind] ?? makeSourceLayers(for: kind, player: player)
+                if layers.playerLayer.player !== player {
+                    layers.playerLayer.player = player
+                }
+                guard activeOrder.contains(kind) else {
+                    layers.shadowHost.isHidden = true
+                    continue
+                }
+                layers.shadowHost.isHidden = false
+                layers.shadowHost.zPosition = zIndex
+                zIndex += 1
+                layoutSource(kind: kind, layers: layers, geometry: geometry, aspectRatios: aspectRatios, scale: scale, scene: scene)
+            }
+        }
+    }
+
+    private func makeSourceLayers(for kind: SceneLayerKind, player: AVPlayer) -> SourceLayers {
+        let layers = SourceLayers()
+        layers.shadowHost.actions = disabledActions
+        layers.shadowHost.masksToBounds = false
+        layers.clip.actions = disabledActions
+        layers.clip.isGeometryFlipped = true
+        layers.clip.masksToBounds = true
+        layers.playerLayer.actions = disabledActions
+        layers.playerLayer.videoGravity = .resize
+        layers.playerLayer.player = player
+        layers.clip.addSublayer(layers.playerLayer)
+        layers.shadowHost.addSublayer(layers.clip)
+        canvasLayer.addSublayer(layers.shadowHost)
+        sourceLayers[kind] = layers
+        return layers
+    }
+
+    private func layoutSource(
+        kind: SceneLayerKind,
+        layers: SourceLayers,
+        geometry: SceneRenderGeometry,
+        aspectRatios: [SceneLayerKind: CGFloat],
+        scale: CGFloat,
+        scene: RecordingScene
+    ) {
+        let targetRect = geometry.targetRect(for: kind)
+        let aspect = aspectRatios[kind] ?? (targetRect.height > 0 ? targetRect.width / targetRect.height : 1)
+        let sourceFrame = geometry.sourceFrame(
+            for: kind,
+            sourceAspectRatio: aspect,
+            sourceCropAmount: kind == .camera ? scene.cameraCropAmount : scene.screenCropAmount,
+            sourceCropPosition: kind == .camera ? scene.cameraCropPosition : scene.screenCropPosition
+        )
+        let radius = geometry.sourceCornerRadius(for: kind) * scale
+
+        let clipFrame = CGRect(
+            x: targetRect.minX * scale,
+            y: targetRect.minY * scale,
+            width: targetRect.width * scale,
+            height: targetRect.height * scale
+        )
+        layers.shadowHost.frame = clipFrame
+        layers.clip.frame = CGRect(origin: .zero, size: clipFrame.size)
+        layers.clip.cornerRadius = radius
+        layers.playerLayer.frame = CGRect(
+            x: (sourceFrame.minX - targetRect.minX) * scale,
+            y: (sourceFrame.minY - targetRect.minY) * scale,
+            width: sourceFrame.width * scale,
+            height: sourceFrame.height * scale
+        )
+
+        if kind == .camera, scene.cameraShadowEnabled {
+            layers.shadowHost.shadowColor = CGColor(gray: 0, alpha: 1)
+            layers.shadowHost.shadowRadius = 18 * scale
+            layers.shadowHost.shadowOffset = CGSize(width: 0, height: 8 * scale)
+            layers.shadowHost.shadowOpacity = 0.45
+            layers.shadowHost.shadowPath = CGPath(
+                roundedRect: CGRect(origin: .zero, size: clipFrame.size),
+                cornerWidth: radius,
+                cornerHeight: radius,
+                transform: nil
+            )
+        } else {
+            layers.shadowHost.shadowOpacity = 0
+        }
+    }
+
+    private func updateBackground(scene: RecordingScene, canvasSize: CGSize) {
+        backgroundLayer.frame = CGRect(origin: .zero, size: canvasSize)
+        let appearance = scene.canvasBackgroundStyle.appearance
+        backgroundLayer.backgroundColor = appearance.solidCGColor
+        let scaleFactor = window?.backingScaleFactor ?? 2
+        let width = Int((canvasSize.width * scaleFactor).rounded(.up))
+        let height = Int((canvasSize.height * scaleFactor).rounded(.up))
+        guard width > 0, height > 0 else { return }
+        let key = (scene.canvasBackgroundStyle, width, height)
+        if renderedBackgroundKey == nil || renderedBackgroundKey! != key {
+            backgroundLayer.contents = appearance.renderCGImage(pixelWidth: width, pixelHeight: height)
+            renderedBackgroundKey = key
+        }
+    }
+
+    func teardown() {
+        stopDisplayLink()
+        for layers in sourceLayers.values {
+            layers.playerLayer.player = nil
+        }
+    }
+}

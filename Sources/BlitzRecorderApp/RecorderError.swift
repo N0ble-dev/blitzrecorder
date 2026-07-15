@@ -11,6 +11,7 @@ enum RecorderError: LocalizedError {
     case cameraDidNotStart
     case screenDidNotStart
     case microphoneDidNotStart
+    case systemAudioDidNotStart
     case speechUnavailable
     case noSourcesSelected
     case outputDirectoryUnavailable(String)
@@ -47,6 +48,8 @@ enum RecorderError: LocalizedError {
             "Screen capture did not start producing frames. Check that the selected screen source is open and available."
         case .microphoneDidNotStart:
             "Microphone did not start producing audio. Check that the selected microphone is connected and not in use by another app."
+        case .systemAudioDidNotStart:
+            "Mac audio did not start producing samples. Check Screen Recording access and retry."
         case .speechUnavailable:
             "Speech transcription is unavailable."
         case .noSourcesSelected:

@@ -106,6 +106,16 @@ copy_sparkle_framework() {
       -quit 2>/dev/null || true
   )"
 
+  if [[ -z "$sparkle_framework" ]]; then
+    sparkle_framework="$(
+      find "$ROOT/.build" \
+        -path "*/$CONFIG/Sparkle.framework" \
+        -type d \
+        -print \
+        -quit 2>/dev/null || true
+    )"
+  fi
+
   if [[ -z "$sparkle_framework" || ! -d "$sparkle_framework" ]]; then
     echo "error: Sparkle.framework was not found after swift build." >&2
     exit 1

@@ -113,8 +113,7 @@ final class MainMenuBuilder {
             title: "Display",
             options: displayOptions,
             selectedID: coordinator?.settings.selectedDisplayID,
-            chooseAction: #selector(MenuActionsTarget.chooseDisplayItem(_:)),
-            pickAction: #selector(MenuActionsTarget.pickScreen)
+            chooseAction: #selector(MenuActionsTarget.chooseDisplayItem(_:))
         ))
         submenu.addItem(deviceSubmenu(
             title: "Camera",

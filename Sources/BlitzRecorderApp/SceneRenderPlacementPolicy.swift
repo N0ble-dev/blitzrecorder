@@ -178,10 +178,10 @@ struct SceneRenderPlacementPolicy {
     }
 
     private func defaultSourceCropAmount(for kind: SceneLayerKind) -> CGPoint {
-        kind == .camera ? scene.cameraCropAmount : .zero
+        kind == .camera ? scene.cameraCropAmount : scene.screenCropAmount
     }
 
     private func defaultSourceCropPosition(for kind: SceneLayerKind) -> CGPoint {
-        kind == .camera ? scene.cameraCropPosition : .zero
+        kind == .camera ? scene.cameraCropPosition : scene.screenCropPosition
     }
 }

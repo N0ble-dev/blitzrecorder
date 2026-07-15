@@ -233,30 +233,13 @@ private struct RecordingStorageSettings: View {
 private struct RecordingSettingsControls: View {
     @Bindable var vm: RecorderViewModel
     @State private var showsAdvanced = false
+    @State private var hoveredResolution: OutputResolution?
     private var canEdit: Bool { vm.state == .idle }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             optionSection("Quality") {
-                LazyVGrid(
-                    columns: [
-                        GridItem(.flexible(), spacing: 10),
-                        GridItem(.flexible(), spacing: 10)
-                    ],
-                    spacing: 10
-                ) {
-                    ForEach(OutputResolution.allCases, id: \.self) { resolution in
-                        let dimensions = resolution.dimensions(for: vm.settings.layout)
-                        optionButton(
-                            title: resolution.displayName,
-                            detail: "\(dimensions.width) × \(dimensions.height)",
-                            systemImage: "rectangle.dashed",
-                            isSelected: vm.settings.outputResolution == resolution
-                        ) {
-                            vm.setResolution(resolution)
-                        }
-                    }
-                }
+                resolutionPicker
             }
 
             optionSection("Smoothness") {
@@ -484,47 +467,68 @@ private struct RecordingSettingsControls: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func optionButton(
-        title: String,
-        detail: String,
-        systemImage: String,
-        isSelected: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(isSelected ? .black.opacity(0.78) : .white.opacity(0.52))
-                    .frame(width: 18)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(isSelected ? .black : .white.opacity(0.86))
-                    Text(detail)
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(isSelected ? .black.opacity(0.58) : .white.opacity(0.46))
+    private var resolutionPicker: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 2) {
+                ForEach(OutputResolution.allCases, id: \.self) { resolution in
+                    resolutionButton(resolution)
                 }
+            }
+            .padding(3)
+            .background(Color.black.opacity(0.18), in: .rect(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.white.opacity(0.07), lineWidth: 1)
+            }
+
+            HStack(spacing: 6) {
+                Text(selectedResolutionDimensions)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.52))
 
                 Spacer(minLength: 0)
+
+                Text("\(vm.settings.layout.shortLabel) output")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.36))
             }
-            .padding(.horizontal, 12)
-            .frame(height: 54)
-            .contentShape(.rect)
+            .padding(.horizontal, 2)
+        }
+        .disabled(!canEdit)
+    }
+
+    private func resolutionButton(_ resolution: OutputResolution) -> some View {
+        let isSelected = vm.settings.outputResolution == resolution
+        let isHovered = hoveredResolution == resolution
+
+        return Button {
+            vm.setResolution(resolution)
+        } label: {
+            Text(resolution.displayName)
+                .font(.system(size: 11, weight: isSelected ? .bold : .semibold))
+                .foregroundStyle(isSelected ? .black.opacity(0.88) : .white.opacity(0.66))
+                .frame(maxWidth: .infinity)
+                .frame(height: 32)
+                .contentShape(.rect(cornerRadius: 7))
         }
         .buttonStyle(.plain)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(isSelected ? Color.white : Color.white.opacity(0.055))
+            isSelected
+                ? Color.white.opacity(0.94)
+                : Color.white.opacity(isHovered ? 0.09 : 0),
+            in: .rect(cornerRadius: 7)
         )
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(isSelected ? Color.white.opacity(0.0) : Color.white.opacity(0.08), lineWidth: 1)
+        .shadow(color: .black.opacity(isSelected ? 0.22 : 0), radius: 3, y: 1)
+        .onHover { hovering in
+            hoveredResolution = hovering ? resolution : nil
         }
-        .disabled(!canEdit)
         .pointingHandCursor()
-        .help(title)
+        .help("Record at \(resolution.displayName)")
+    }
+
+    private var selectedResolutionDimensions: String {
+        let dimensions = vm.settings.outputResolution.dimensions(for: vm.settings.layout)
+        return "\(dimensions.width) × \(dimensions.height)"
     }
 
     private func pillButton(
@@ -612,13 +616,13 @@ struct PermissionsPage: View {
                 Text("Access")
                     .font(.system(size: 22, weight: .bold))
                     .foregroundStyle(.white)
-                Text("Grant access only when a selected source needs it.")
+                Text("See what this app can use and what the current recording still needs.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.55))
             }
 
             PermissionSetupCard(vm: vm)
-                .frame(width: 520, alignment: .leading)
+                .frame(width: 600, alignment: .leading)
 
             VStack(spacing: 0) {
                 ForEach(Array(vm.permissionStatusRows.enumerated()), id: \.element.id) { index, row in
@@ -633,7 +637,7 @@ struct PermissionsPage: View {
                 }
             }
             .padding(.vertical, 4)
-            .frame(width: 520, alignment: .leading)
+            .frame(width: 600, alignment: .leading)
             .blitzGlassSurface(cornerRadius: 16)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -648,16 +652,20 @@ struct PermissionsPage: View {
     private func handleTap(_ row: PermissionStatusRow) {
         switch row.source {
         case .screen:
-            if row.isActive, vm.shouldSuggestScreenPicker {
-                vm.pickScreen()
+            if row.isActive, !vm.isPersistentScreenCaptureAccessActive {
+                vm.openScreenRecordingSettings()
+                vm.refreshPermissionStatus(message: "Enable Screen Recording for \(appName) in macOS Settings.")
             } else if row.isActive {
-                vm.applyScreenRecordingPermission()
+                vm.refreshPermissionStatus(message: "Screen Recording is enabled for \(appName).")
             } else {
                 vm.refreshPermissionStatus(message: "\(row.title) is not enabled in the current setup.")
             }
         case .systemAudio:
-            if row.isActive {
-                vm.applyScreenRecordingPermission()
+            if row.isBlocked {
+                vm.openScreenRecordingSettings()
+                vm.refreshPermissionStatus(message: "Enable Screen Recording for Mac audio, then quit and reopen.")
+            } else if row.isActive {
+                vm.refreshPermissionStatus(message: "System Audio is enabled for recordings.")
             } else {
                 vm.refreshPermissionStatus(message: "\(row.title) is not enabled in the current setup.")
             }
@@ -670,6 +678,11 @@ struct PermissionsPage: View {
         case nil:
             vm.requestAccessibilityPermission()
         }
+    }
+
+    private var appName: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+            ?? "BlitzRecorder"
     }
 }
 
@@ -685,10 +698,10 @@ private struct PermissionSetupCard: View {
                     .frame(width: 26, height: 26)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(vm.recordingReadiness.isReady ? "Ready to record" : "Recording access needs attention")
+                    Text(statusTitle)
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(.white.opacity(0.9))
-                    Text(vm.permissionSetupSummary)
+                    Text(statusDetail)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.white.opacity(0.56))
                         .lineLimit(3)
@@ -700,31 +713,9 @@ private struct PermissionSetupCard: View {
 
             HStack(spacing: 8) {
                 Button {
-                    vm.runPrimaryPermissionAction()
+                    runPrimaryAction()
                 } label: {
-                    Label(vm.primaryPermissionActionTitle, systemImage: vm.shouldSuggestScreenPicker ? "rectangle.on.rectangle" : "lock.open")
-                        .font(.system(size: 11, weight: .bold))
-                        .padding(.horizontal, 10)
-                        .frame(height: 32)
-                }
-                .blitzGlassButton()
-                .pointingHandCursor()
-
-                Button {
-                    vm.pickScreen()
-                } label: {
-                    Label("Pick Screen", systemImage: "rectangle.on.rectangle")
-                        .font(.system(size: 11, weight: .bold))
-                        .padding(.horizontal, 10)
-                        .frame(height: 32)
-                }
-                .blitzGlassButton()
-                .pointingHandCursor()
-
-                Button {
-                    vm.openScreenRecordingSettings()
-                } label: {
-                    Label("System Settings", systemImage: "gearshape")
+                    Label(primaryActionTitle, systemImage: primaryActionSymbol)
                         .font(.system(size: 11, weight: .bold))
                         .padding(.horizontal, 10)
                         .frame(height: 32)
@@ -734,14 +725,53 @@ private struct PermissionSetupCard: View {
 
                 Spacer(minLength: 0)
             }
-
-            Text("For iPhone camera pairing, allow Local Network in the iPhone app and keep both devices on the same network.")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.white.opacity(0.46))
-                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(16)
         .blitzGlassSurface(cornerRadius: 16)
+    }
+
+    private var statusTitle: String {
+        if showsScreenAccessAction {
+            return "Screen Recording is off for \(appName)"
+        }
+        if vm.recordingReadiness.isReady {
+            return "Ready to record"
+        }
+        return "Recording access needs attention"
+    }
+
+    private var statusDetail: String {
+        if showsScreenAccessAction {
+            return "Enable \(appName) under Screen & System Audio Recording in macOS Settings "
+                + "for persistent full capture. Screen selection stays in the recorder."
+        }
+        return vm.permissionSetupSummary
+    }
+
+    private var showsScreenAccessAction: Bool {
+        vm.settings.enabledSources.contains(.screen)
+            && !vm.isPersistentScreenCaptureAccessActive
+    }
+
+    private var primaryActionTitle: String {
+        showsScreenAccessAction ? "Open macOS Settings" : vm.primaryPermissionActionTitle
+    }
+
+    private var primaryActionSymbol: String {
+        showsScreenAccessAction ? "gearshape" : "lock.open"
+    }
+
+    private func runPrimaryAction() {
+        if showsScreenAccessAction {
+            vm.openScreenRecordingSettings()
+        } else {
+            vm.runPrimaryPermissionAction()
+        }
+    }
+
+    private var appName: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+            ?? "BlitzRecorder"
     }
 
     private var tint: Color {

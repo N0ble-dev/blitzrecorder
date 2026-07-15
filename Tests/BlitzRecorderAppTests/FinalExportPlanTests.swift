@@ -93,6 +93,34 @@ final class FinalExportPlanTests: XCTestCase {
         XCTAssertEqual(cameraInsertion.duration.seconds, 0.7, accuracy: 0.0001)
     }
 
+    func testPlanTrimsEverySourceToSharedEditorStart() throws {
+        var settings = RecordingSettings()
+        settings.enabledSources = [.screen, .camera]
+        let sources = FinalExportPlanning.applyingTimelineTrim(
+            FinalExportPlanning.TimelineTrimRequest(
+                sources: [
+                    source(.screen, duration: 2),
+                    source(.camera, duration: 1.8, offset: 0.2)
+                ],
+                offset: CMTime(seconds: 0.5, preferredTimescale: 600)
+            )
+        )
+
+        let plan = try FinalExportPlanning.plan(
+            settings: settings,
+            sceneEvents: [],
+            sources: sources
+        )
+        let screenInsertion = try XCTUnwrap(plan.insertion(for: .screen))
+        let cameraInsertion = try XCTUnwrap(plan.insertion(for: .camera))
+
+        XCTAssertEqual(plan.duration.seconds, 1.5, accuracy: 0.0001)
+        XCTAssertEqual(screenInsertion.sourceStart.seconds, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(screenInsertion.compositionStart.seconds, 0, accuracy: 0.0001)
+        XCTAssertEqual(cameraInsertion.sourceStart.seconds, 0.3, accuracy: 0.0001)
+        XCTAssertEqual(cameraInsertion.compositionStart.seconds, 0, accuracy: 0.0001)
+    }
+
     func testPlanCanUseSourceRevealedBySceneEvent() throws {
         var settings = RecordingSettings()
         settings.enabledSources = [.screen, .camera]

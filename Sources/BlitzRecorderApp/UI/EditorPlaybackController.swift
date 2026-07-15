@@ -3,29 +3,79 @@ import Foundation
 import Observation
 import SwiftUI
 
+enum EditorProjectRefreshKind: Equatable {
+    case fullPlayback
+    case sceneTimeline
+}
+
+struct EditorProjectRefreshRequest {
+    let hasActivePlayback: Bool
+    let isSameProject: Bool
+    let hasSameMedia: Bool
+}
+
+enum EditorProjectRefreshPolicy {
+    static func kind(for request: EditorProjectRefreshRequest) -> EditorProjectRefreshKind {
+        guard request.hasActivePlayback,
+              request.isSameProject,
+              request.hasSameMedia else {
+            return .fullPlayback
+        }
+        return .sceneTimeline
+    }
+}
+
+private struct EditorPlaybackMediaSignature: Equatable {
+    let version: Int
+    let id: UUID
+    let projectPath: String
+    let takeDirectoryPath: String
+    let finalVideoPath: String?
+    let timelineTrimOffsetSeconds: Double
+    let sourceTimelineOffsetSeconds: [String: Double]
+    let settings: RecordingProject.SettingsSnapshot
+    let sources: [RecordingProject.SourceFile]
+
+    init(project: RecordingProject) {
+        version = project.version
+        id = project.id
+        projectPath = project.projectPath
+        takeDirectoryPath = project.takeDirectoryPath
+        finalVideoPath = project.finalVideoPath
+        timelineTrimOffsetSeconds = project.timelineTrimOffsetSeconds
+        sourceTimelineOffsetSeconds = project.sourceTimelineOffsetSeconds
+        settings = project.settings
+        sources = project.sources
+    }
+}
+
+struct EditorPlaybackSceneTimelineUpdate {
+    let project: RecordingProject
+    let baseSettings: RecordingSettings
+}
+
 @MainActor
 @Observable
 final class EditorPlaybackController {
-    let player = AVPlayer()
-
-    init() {
-        player.automaticallyWaitsToMinimizeStalling = false
-    }
-
     private(set) var duration: Double = 0
     private(set) var currentTime: Double = 0
     private(set) var isPlaying = false
     private(set) var isReady = false
     private(set) var loadError: String?
     private(set) var renderSize: CGSize = .zero
-    private(set) var previewRevision = 0
     private(set) var hiddenKinds: Set<SceneLayerKind> = []
     private(set) var mutedSources: Set<CaptureSource> = []
 
     @ObservationIgnored private var playback: EditorPlaybackComposition?
+    @ObservationIgnored private var videoPlayers: [SceneLayerKind: AVPlayer] = [:]
+    @ObservationIgnored private var audioPlayer: AVPlayer?
+    @ObservationIgnored private var audioInputs: [(source: CaptureSource, baseVolume: Float)] = []
+    @ObservationIgnored private var audioMixTracks: [(source: CaptureSource, track: AVCompositionTrack, baseVolume: Float)] = []
+    @ObservationIgnored private var audioComposition: AVMutableComposition?
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var endObserver: NSObjectProtocol?
     @ObservationIgnored private var loadedProjectPath: String?
+    @ObservationIgnored private var loadedMediaSignature: EditorPlaybackMediaSignature?
     @ObservationIgnored private var isScrubbing = false
     @ObservationIgnored private var loadGeneration = 0
     @ObservationIgnored private var previewSceneOverride: (scene: RecordingScene, time: Double)?
@@ -38,6 +88,24 @@ final class EditorPlaybackController {
         Set(playback?.audioInputs.map(\.source) ?? [])
     }
 
+    var sourceAspectRatios: [SceneLayerKind: CGFloat] {
+        playback?.sourceAspectRatios ?? [:]
+    }
+
+    func videoPlayer(for kind: SceneLayerKind) -> AVPlayer? {
+        videoPlayers[kind]
+    }
+
+    private var masterPlayer: AVPlayer? {
+        audioPlayer ?? videoPlayers[.screen] ?? videoPlayers[.camera]
+    }
+
+    private var allPlayers: [AVPlayer] {
+        var players = Array(videoPlayers.values)
+        if let audioPlayer { players.append(audioPlayer) }
+        return players
+    }
+
     func load(project: RecordingProject, baseSettings: RecordingSettings) async {
         loadGeneration += 1
         let generation = loadGeneration
@@ -46,7 +114,7 @@ final class EditorPlaybackController {
         let resumeTime = isSameProject ? currentTime : 0
         let wasPlaying = isSameProject && isPlaying
 
-        player.pause()
+        pauseAll()
         isPlaying = false
         isReady = false
         loadError = nil
@@ -54,11 +122,7 @@ final class EditorPlaybackController {
         let store = TakeFileStore()
         let outputFormat = OutputVideoFormat(rawValue: project.settings.outputVideoFormat)
             ?? baseSettings.outputVideoFormat
-        let settings = store.recordingSettings(
-            from: project,
-            baseSettings: baseSettings,
-            outputFormat: outputFormat
-        )
+        let settings = store.recordingSettings(from: project, baseSettings: baseSettings, outputFormat: outputFormat)
         let take = store.recordingTake(from: project, settings: settings, outputFormat: outputFormat)
         let sceneEvents = store.sceneEvents(from: project)
 
@@ -69,8 +133,10 @@ final class EditorPlaybackController {
                 sceneEvents: sceneEvents
             )
             guard generation == loadGeneration, !Task.isCancelled else { return }
+            teardownPlayers()
             self.playback = playback
             loadedProjectPath = project.projectPath
+            loadedMediaSignature = EditorPlaybackMediaSignature(project: project)
             renderSize = playback.renderSize
             previewSceneOverride = nil
             if isSameProject {
@@ -81,51 +147,159 @@ final class EditorPlaybackController {
                 mutedSources = []
             }
 
-            let item = playback.playerItem(
-                hiding: hiddenKinds,
-                muting: mutedSources
-            )
-            item.preferredForwardBufferDuration = 0.1
-            player.replaceCurrentItem(with: item)
-            applyPreviewDuration(playback)
-            installTimeObserverIfNeeded()
-            installEndObserver(for: item)
+            try await buildPlayers(playback: playback)
+            duration = max(0, playback.duration.seconds)
+            installObservers()
 
-            if resumeTime > 0 {
-                currentTime = min(resumeTime, duration)
-                await seekPlayerPrecisely(to: currentTime)
-            } else {
-                currentTime = 0
-                await seekPlayerPrecisely(to: 0)
-            }
+            let startTime = resumeTime > 0 ? min(resumeTime, duration) : 0
+            currentTime = startTime
+            await seekAllPrecisely(to: startTime)
+
             guard generation == loadGeneration, !Task.isCancelled else { return }
             isReady = true
-            if wasPlaying {
-                player.play()
-                isPlaying = true
-            }
+            if wasPlaying { playAll() }
         } catch {
             guard generation == loadGeneration, !Task.isCancelled else { return }
+            teardownPlayers()
             playback = nil
             loadedProjectPath = nil
+            loadedMediaSignature = nil
             duration = 0
             renderSize = .zero
             loadError = error.localizedDescription
         }
     }
 
+    func refreshSceneTimeline(_ update: EditorPlaybackSceneTimelineUpdate) -> Bool {
+        let incomingSignature = EditorPlaybackMediaSignature(project: update.project)
+        let kind = EditorProjectRefreshPolicy.kind(for: EditorProjectRefreshRequest(
+            hasActivePlayback: isReady && playback != nil,
+            isSameProject: loadedProjectPath == update.project.projectPath,
+            hasSameMedia: loadedMediaSignature == incomingSignature
+        ))
+        guard kind == .sceneTimeline, let playback else { return false }
+
+        let store = TakeFileStore()
+        let outputFormat = OutputVideoFormat(rawValue: update.project.settings.outputVideoFormat)
+            ?? update.baseSettings.outputVideoFormat
+        let settings = store.recordingSettings(
+            from: update.project,
+            baseSettings: update.baseSettings,
+            outputFormat: outputFormat
+        )
+        let sceneEvents = store.sceneEvents(from: update.project)
+        guard let refreshedPlayback = try? playback.updatingSceneTimeline(EditorPlaybackSceneTimeline(
+            settings: settings,
+            sceneEvents: sceneEvents
+        )) else {
+            return false
+        }
+
+        self.playback = refreshedPlayback
+        loadedMediaSignature = incomingSignature
+        previewSceneOverride = nil
+        renderSize = refreshedPlayback.renderSize
+        applyPreviewDuration()
+        return true
+    }
+
+    private func buildPlayers(playback: EditorPlaybackComposition) async throws {
+        for kind in playback.videoKinds {
+            guard let asset = playback.videoAsset(for: kind) else { continue }
+            let item = AVPlayerItem(asset: asset)
+            let player = AVPlayer(playerItem: item)
+            player.automaticallyWaitsToMinimizeStalling = false
+            player.isMuted = true
+            videoPlayers[kind] = player
+        }
+        try await buildAudioPlayer(playback: playback)
+    }
+
+    private func buildAudioPlayer(playback: EditorPlaybackComposition) async throws {
+        let inputs = playback.audioInputs
+        guard !inputs.isEmpty else { return }
+        let composition = AVMutableComposition()
+        var mixTracks: [(source: CaptureSource, track: AVCompositionTrack, baseVolume: Float)] = []
+        for input in inputs {
+            guard let track = composition.addMutableTrack(
+                withMediaType: .audio,
+                preferredTrackID: kCMPersistentTrackID_Invalid
+            ) else { continue }
+            let range = input.track.timeRange
+            guard CMTimeCompare(range.duration, .zero) > 0 else { continue }
+            try? track.insertTimeRange(range, of: input.track, at: range.start)
+            mixTracks.append((input.source, track, input.volume))
+        }
+        guard !mixTracks.isEmpty else { return }
+        audioComposition = composition
+        audioMixTracks = mixTracks
+        let item = AVPlayerItem(asset: composition)
+        item.audioMix = audioMix()
+        let player = AVPlayer(playerItem: item)
+        player.automaticallyWaitsToMinimizeStalling = false
+        audioPlayer = player
+    }
+
+    private func audioMix() -> AVAudioMix? {
+        guard !audioMixTracks.isEmpty else { return nil }
+        let mix = AVMutableAudioMix()
+        mix.inputParameters = audioMixTracks.map { entry in
+            let params = AVMutableAudioMixInputParameters(track: entry.track)
+            params.setVolume(mutedSources.contains(entry.source) ? 0 : entry.baseVolume, at: .zero)
+            return params
+        }
+        return mix
+    }
+
+    func scene(at seconds: Double) -> RecordingScene? {
+        guard let playback else { return nil }
+        let segments: [FinalExportRenderSegment]
+        if let previewSceneOverride {
+            segments = playback.renderSegments(
+                hiding: hiddenKinds,
+                overriding: previewSceneOverride.scene,
+                at: CMTime(seconds: previewSceneOverride.time, preferredTimescale: 600)
+            )
+        } else {
+            segments = playback.renderSegments(hiding: hiddenKinds)
+        }
+        let time = CMTime(seconds: clampedTime(seconds), preferredTimescale: 600)
+        let segment = segments.first { CMTimeRangeContainsTime($0.timeRange, time: time) } ?? segments.last
+        return segment?.scene
+    }
+
     func togglePlayback() {
-        guard isReady, player.currentItem != nil else { return }
-        if player.rate != 0 {
-            player.pause()
+        guard isReady, masterPlayer != nil else { return }
+        if isPlaying {
+            pauseAll()
+            isPlaying = false
         } else {
             if duration > 0, currentTime >= duration - 0.05 {
-                player.seek(to: .zero)
                 currentTime = 0
+                seekAll(to: 0, precise: true)
             }
-            player.play()
+            playAll()
+            isPlaying = true
         }
-        isPlaying = player.rate != 0
+    }
+
+    private func playAll() {
+        let now = CMClockGetTime(CMClockGetHostTimeClock())
+        let hostTime = CMTimeAdd(now, CMTime(seconds: 0.06, preferredTimescale: 600))
+        for player in allPlayers {
+            let clamped = itemClampedTime(currentTime, for: player)
+            player.setRate(1, time: CMTime(seconds: clamped, preferredTimescale: 600), atHostTime: hostTime)
+        }
+    }
+
+    private func pauseAll() {
+        for player in allPlayers { player.rate = 0 }
+    }
+
+    private func itemClampedTime(_ seconds: Double, for player: AVPlayer) -> Double {
+        let itemDuration = player.currentItem?.duration.seconds ?? duration
+        let limit = itemDuration.isFinite ? itemDuration : duration
+        return min(max(0, seconds), max(limit, 0))
     }
 
     func scrub(to seconds: Double) {
@@ -133,11 +307,13 @@ final class EditorPlaybackController {
         isScrubbing = true
         let clamped = clampedTime(seconds)
         currentTime = clamped
-        player.seek(
-            to: CMTime(seconds: clamped, preferredTimescale: 600),
-            toleranceBefore: CMTime(seconds: 0.1, preferredTimescale: 600),
-            toleranceAfter: CMTime(seconds: 0.1, preferredTimescale: 600)
-        )
+        for player in allPlayers {
+            player.seek(
+                to: CMTime(seconds: itemClampedTime(clamped, for: player), preferredTimescale: 600),
+                toleranceBefore: CMTime(seconds: 0.1, preferredTimescale: 600),
+                toleranceAfter: CMTime(seconds: 0.1, preferredTimescale: 600)
+            )
+        }
     }
 
     func endScrub() {
@@ -150,11 +326,33 @@ final class EditorPlaybackController {
         guard isReady else { return }
         let clamped = clampedTime(seconds)
         currentTime = clamped
-        player.seek(
-            to: CMTime(seconds: clamped, preferredTimescale: 600),
-            toleranceBefore: .zero,
-            toleranceAfter: .zero
-        )
+        seekAll(to: clamped, precise: true)
+    }
+
+    private func seekAll(to seconds: Double, precise: Bool) {
+        for player in allPlayers {
+            let t = CMTime(seconds: itemClampedTime(seconds, for: player), preferredTimescale: 600)
+            if precise {
+                player.seek(to: t, toleranceBefore: .zero, toleranceAfter: .zero)
+            } else {
+                player.seek(to: t)
+            }
+        }
+    }
+
+    private func seekAllPrecisely(to seconds: Double) async {
+        await withTaskGroup(of: Void.self) { group in
+            for player in allPlayers {
+                let t = CMTime(seconds: itemClampedTime(seconds, for: player), preferredTimescale: 600)
+                group.addTask { @MainActor in
+                    await withCheckedContinuation { continuation in
+                        player.seek(to: t, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                            continuation.resume()
+                        }
+                    }
+                }
+            }
+        }
     }
 
     func seek(by delta: Double) {
@@ -170,43 +368,30 @@ final class EditorPlaybackController {
     }
 
     func setHidden(_ hidden: Bool, kind: SceneLayerKind) {
-        guard let playback else { return }
-        if hidden {
-            hiddenKinds.insert(kind)
-        } else {
-            hiddenKinds.remove(kind)
-        }
-        applyVideoComposition(playback)
-        applyPreviewDuration(playback)
+        guard playback != nil else { return }
+        if hidden { hiddenKinds.insert(kind) } else { hiddenKinds.remove(kind) }
+        applyPreviewDuration()
     }
 
     func setMuted(_ muted: Bool, source: CaptureSource) {
-        guard let playback else { return }
-        if muted {
-            mutedSources.insert(source)
-        } else {
-            mutedSources.remove(source)
-        }
-        player.currentItem?.audioMix = playback.audioMix(muting: mutedSources)
+        guard playback != nil else { return }
+        if muted { mutedSources.insert(source) } else { mutedSources.remove(source) }
+        audioPlayer?.currentItem?.audioMix = audioMix()
     }
 
     func setPreviewSceneOverride(_ scene: RecordingScene?, at seconds: Double) {
-        guard let playback else { return }
+        guard playback != nil else { return }
         previewSceneOverride = scene.map { ($0, clampedTime(seconds)) }
-        applyVideoComposition(playback)
     }
 
     func layerFrames(at seconds: Double) -> [(kind: SceneLayerKind, frame: CGRect)] {
-        guard let playback,
-              renderSize.width > 0,
-              renderSize.height > 0 else { return [] }
+        guard let playback, renderSize.width > 0, renderSize.height > 0 else { return [] }
         let time = CMTime(seconds: clampedTime(seconds), preferredTimescale: 600)
         let renderSegments = playback.renderSegments(hiding: hiddenKinds)
         let segment = renderSegments.first {
             CMTimeRangeContainsTime($0.timeRange, time: time)
         } ?? renderSegments.last
         guard let segment else { return [] }
-
         return playback.normalizedLayerFrames(
             scene: segment.scene,
             activeLayerOrder: segment.activeLayerOrder,
@@ -221,108 +406,100 @@ final class EditorPlaybackController {
 
     func pauseForEditing() {
         guard isReady else { return }
-        player.pause()
+        pauseAll()
         isPlaying = false
-        let seconds = player.currentTime().seconds
-        if seconds.isFinite {
+        if let seconds = masterPlayer?.currentTime().seconds, seconds.isFinite {
             currentTime = clampedTime(seconds)
         }
     }
 
     func displayTime() -> Double {
-        guard isReady, player.rate != 0, !isScrubbing else { return currentTime }
-        let seconds = player.currentTime().seconds
-        guard seconds.isFinite else { return currentTime }
+        guard isReady, isPlaying, !isScrubbing else { return currentTime }
+        guard let seconds = masterPlayer?.currentTime().seconds, seconds.isFinite else { return currentTime }
         return clampedTime(seconds)
     }
 
     func teardown() {
         loadGeneration += 1
-        player.pause()
-        player.replaceCurrentItem(with: nil)
+        teardownPlayers()
         isPlaying = false
         isReady = false
         loadedProjectPath = nil
+        loadedMediaSignature = nil
         previewSceneOverride = nil
-        if let timeObserver {
-            player.removeTimeObserver(timeObserver)
-            self.timeObserver = nil
+    }
+
+    private func teardownPlayers() {
+        if let timeObserver, let masterPlayer {
+            masterPlayer.removeTimeObserver(timeObserver)
         }
+        timeObserver = nil
         if let endObserver {
             NotificationCenter.default.removeObserver(endObserver)
             self.endObserver = nil
         }
-    }
-
-    private func applyVideoComposition(_ playback: EditorPlaybackComposition) {
-        guard let item = player.currentItem else { return }
-        if let previewSceneOverride {
-            item.videoComposition = playback.videoComposition(
-                hiding: hiddenKinds,
-                overriding: previewSceneOverride.scene,
-                at: CMTime(seconds: previewSceneOverride.time, preferredTimescale: 600)
-            )
-        } else {
-            item.videoComposition = playback.videoComposition(hiding: hiddenKinds)
+        for player in allPlayers {
+            player.pause()
+            player.replaceCurrentItem(with: nil)
         }
-        previewRevision += 1
-
-        guard isReady, player.rate == 0 else { return }
-        let time = CMTime(seconds: clampedTime(currentTime), preferredTimescale: 600)
-        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+        videoPlayers = [:]
+        audioPlayer = nil
+        audioComposition = nil
+        audioMixTracks = []
     }
 
-    private func applyPreviewDuration(_ playback: EditorPlaybackComposition) {
+    private func applyPreviewDuration() {
+        guard let playback else { return }
         let previewDuration = playback.duration(hiding: hiddenKinds)
         duration = max(0, previewDuration.seconds)
-        player.currentItem?.forwardPlaybackEndTime = previewDuration
-        if currentTime > duration {
-            seek(to: duration)
-        }
+        if currentTime > duration { seek(to: duration) }
     }
 
     private func clampedTime(_ seconds: Double) -> Double {
         min(max(0, seconds), max(duration, 0))
     }
 
-    private func seekPlayerPrecisely(to seconds: Double) async {
-        guard player.currentItem != nil else { return }
-        let time = CMTime(seconds: clampedTime(seconds), preferredTimescale: 600)
-        await withCheckedContinuation { continuation in
-            player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-                continuation.resume()
-            }
-        }
-    }
-
-    private func installEndObserver(for item: AVPlayerItem) {
-        if let endObserver {
-            NotificationCenter.default.removeObserver(endObserver)
-        }
-        endObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: item,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.player.pause()
-                self.isPlaying = false
-                self.currentTime = self.duration
-            }
-        }
-    }
-
-    private func installTimeObserverIfNeeded() {
-        guard timeObserver == nil else { return }
-        timeObserver = player.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 0.08, preferredTimescale: 600),
+    private func installObservers() {
+        guard let masterPlayer else { return }
+        timeObserver = masterPlayer.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.05, preferredTimescale: 600),
             queue: .main
         ) { [weak self] time in
             MainActor.assumeIsolated {
                 guard let self, !self.isScrubbing else { return }
-                self.currentTime = max(0, time.seconds.isFinite ? time.seconds : 0)
-                self.isPlaying = self.player.rate != 0
+                let seconds = time.seconds.isFinite ? time.seconds : 0
+                self.currentTime = self.clampedTime(seconds)
+                self.isPlaying = (self.masterPlayer?.rate ?? 0) != 0
+                self.correctDrift(masterTime: seconds)
+            }
+        }
+        if let masterItem = masterPlayer.currentItem {
+            endObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: masterItem,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.pauseAll()
+                    self.isPlaying = false
+                    self.currentTime = self.duration
+                }
+            }
+        }
+    }
+
+    private func correctDrift(masterTime: Double) {
+        guard isPlaying else { return }
+        for player in allPlayers where player !== masterPlayer {
+            let t = player.currentTime().seconds
+            guard t.isFinite else { continue }
+            if abs(t - masterTime) > 0.08 {
+                player.seek(
+                    to: CMTime(seconds: itemClampedTime(masterTime, for: player), preferredTimescale: 600),
+                    toleranceBefore: CMTime(seconds: 0.03, preferredTimescale: 600),
+                    toleranceAfter: CMTime(seconds: 0.03, preferredTimescale: 600)
+                )
             }
         }
     }

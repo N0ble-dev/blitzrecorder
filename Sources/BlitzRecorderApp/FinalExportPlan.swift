@@ -81,6 +81,32 @@ struct FinalExportPlan: Equatable {
 }
 
 enum FinalExportPlanning {
+    struct TimelineTrimRequest {
+        let sources: [FinalExportSourceInput]
+        let offset: CMTime
+    }
+
+    static func applyingTimelineTrim(_ request: TimelineTrimRequest) -> [FinalExportSourceInput] {
+        guard request.offset.isValid,
+              request.offset.seconds.isFinite,
+              CMTimeCompare(request.offset, .zero) > 0 else {
+            return request.sources
+        }
+        let offset = CMTimeConvertScale(
+            request.offset,
+            timescale: 600,
+            method: .roundHalfAwayFromZero
+        )
+        return request.sources.map { source in
+            FinalExportSourceInput(
+                kind: source.kind,
+                duration: source.duration,
+                timelineOffset: CMTimeSubtract(source.timelineOffset, offset),
+                sourceStartOffset: source.sourceStartOffset
+            )
+        }
+    }
+
     static func plan(
         settings: RecordingSettings,
         sceneEvents: [RecordingSceneEvent],

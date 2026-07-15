@@ -113,11 +113,7 @@ final class PreviewStageView: NSView {
     var isCameraCropEditingEnabled: Bool = false {
         didSet {
             syncPreviewCrop()
-            if !canvasFrame.isEmpty {
-                applySceneFrames()
-            }
-            updateSelectionOverlay()
-            invalidateResizeCursorRects()
+            relayoutCanvasImmediately()
         }
     }
 
@@ -349,7 +345,9 @@ final class PreviewStageView: NSView {
         super.layout()
 
         performWithoutUIAnimation {
-            canvasFrame = fittedCanvas(in: bounds.insetBy(dx: resizeHandleOutset + 12, dy: resizeHandleOutset + 12))
+            canvasFrame = fittedCropEditingCanvas(
+                in: bounds.insetBy(dx: resizeHandleOutset + 12, dy: resizeHandleOutset + 12)
+            )
             canvasBackgroundLayer.frame = canvasFrame
             refreshCanvasBackground()
             applyLayerOrder()
@@ -447,6 +445,28 @@ final class PreviewStageView: NSView {
             y: rect.midY - height / 2,
             width: rect.width,
             height: height
+        )
+    }
+
+    private func fittedCropEditingCanvas(in rect: NSRect) -> NSRect {
+        let canvas = fittedCanvas(in: rect)
+        guard isCameraCropEditingEnabled, enabledSources.contains(.camera) else { return canvas }
+
+        let geometry = CameraCropGeometry(
+            renderGeometry: renderGeometry(in: canvas),
+            sourceAspectRatio: cameraPreview.currentSourceAspectRatio
+        )
+        let region = canvas.union(geometry.sourceFrame)
+        guard region.width > 0, region.height > 0 else { return canvas }
+
+        let scale = min(1, rect.width / region.width, rect.height / region.height)
+        let regionX = rect.midX - region.width * scale / 2
+        let regionY = rect.midY - region.height * scale / 2
+        return NSRect(
+            x: regionX + (canvas.minX - region.minX) * scale,
+            y: regionY + (canvas.minY - region.minY) * scale,
+            width: canvas.width * scale,
+            height: canvas.height * scale
         )
     }
 
@@ -1589,11 +1609,12 @@ private final class SceneSelectionOverlayView: NSView {
         defer { NSGraphicsContext.restoreGraphicsState() }
 
         guard let canvasClip, !canvasClip.isEmpty else { return }
-        let clipRect = canvasClip.insetBy(dx: -Self.handleRadius, dy: -Self.handleRadius)
+        let shadeRegion = (isCropMode ? sourceFrame.map { canvasClip.union($0) } : nil) ?? canvasClip
+        let clipRect = shadeRegion.insetBy(dx: -Self.handleRadius, dy: -Self.handleRadius)
         NSBezierPath(rect: clipRect).addClip()
 
         if isCropMode, let sourceFrame {
-            drawCropShade(within: canvasClip, cropFrame: frame)
+            drawCropShade(within: shadeRegion, cropFrame: frame)
             drawCropSourceOutline(sourceFrame)
         }
 

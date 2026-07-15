@@ -26,10 +26,16 @@ enum Merger {
         guard !videoSources.isEmpty else {
             throw RecorderError.exportUnavailable
         }
+        let sourceInputs = FinalExportPlanning.applyingTimelineTrim(
+            FinalExportPlanning.TimelineTrimRequest(
+                sources: videoSources.map(\.planningInput),
+                offset: take.timelineTrimOffset
+            )
+        )
         let exportPlan = try FinalExportPlanning.plan(
             settings: settings,
             sceneEvents: sceneEvents,
-            sources: videoSources.map(\.planningInput)
+            sources: sourceInputs
         )
 
         let composition = AVMutableComposition()
@@ -837,18 +843,25 @@ enum Merger {
 
     private static func expectedAudioSources(for take: RecordingTake, settings: RecordingSettings) -> [ExpectedAudioSource] {
         var sources: [ExpectedAudioSource] = []
+        let sourceStart = { source in
+            let sourceTimelineOffset = take.sourceTimelineOffsets[source] ?? .zero
+            let offset = CMTimeSubtract(take.timelineTrimOffset, sourceTimelineOffset)
+            return CMTimeCompare(offset, .zero) > 0 ? offset : .zero
+        }
         if settings.enabledSources.contains(.microphone) {
             sources.append(ExpectedAudioSource(
                 source: .microphone,
                 url: take.audioURL,
-                volume: Float(settings.microphoneGain)
+                volume: Float(settings.microphoneGain),
+                sourceStart: sourceStart(.microphone)
             ))
         }
         if settings.enabledSources.contains(.systemAudio) {
             sources.append(ExpectedAudioSource(
                 source: .systemAudio,
                 url: take.systemAudioURL,
-                volume: Float(settings.systemAudioGain)
+                volume: Float(settings.systemAudioGain),
+                sourceStart: sourceStart(.systemAudio)
             ))
         }
         return sources
@@ -887,9 +900,13 @@ enum Merger {
             throw missingExpectedAudio(audioSource, reason: "file has no readable audio samples")
         }
 
-        let insertDuration = CMTimeMinimum(duration, audioDuration)
+        let remainingAudioDuration = CMTimeSubtract(audioDuration, audioSource.sourceStart)
+        let insertDuration = CMTimeMinimum(duration, remainingAudioDuration)
+        guard CMTimeCompare(insertDuration, .zero) > 0 else {
+            throw missingExpectedAudio(audioSource, reason: "file ends before the synchronized timeline starts")
+        }
         try compositionAudioTrack.insertTimeRange(
-            CMTimeRange(start: .zero, duration: insertDuration),
+            CMTimeRange(start: audioSource.sourceStart, duration: insertDuration),
             of: audioTrack,
             at: .zero
         )
@@ -1058,6 +1075,11 @@ enum Merger {
 }
 
 
+struct EditorPlaybackSceneTimeline {
+    let settings: RecordingSettings
+    let sceneEvents: [RecordingSceneEvent]
+}
+
 struct EditorPlaybackComposition {
     struct AudioInput {
         let source: CaptureSource
@@ -1076,6 +1098,7 @@ struct EditorPlaybackComposition {
     let videoKinds: [SceneLayerKind]
     let sourceAspectRatios: [SceneLayerKind: CGFloat]
     let audioInputs: [AudioInput]
+    let videoAssets: [SceneLayerKind: AVComposition]
     fileprivate let makeInstructions: (Set<SceneLayerKind>, [FinalExportRenderSegment]) -> [AVMutableVideoCompositionInstruction]
 
     func playerItem(
@@ -1088,6 +1111,36 @@ struct EditorPlaybackComposition {
         }
         item.audioMix = audioMix(muting: mutedSources)
         return item
+    }
+
+    func videoAsset(for kind: SceneLayerKind) -> AVAsset? {
+        videoAssets[kind]
+    }
+
+    func updatingSceneTimeline(_ update: EditorPlaybackSceneTimeline) throws -> EditorPlaybackComposition {
+        let plan = try FinalExportPlanning.plan(
+            settings: update.settings,
+            sceneEvents: update.sceneEvents,
+            sources: sourceInputs
+        )
+        guard plan.renderSize == renderSize else {
+            throw RecorderError.exportUnavailable
+        }
+        return EditorPlaybackComposition(
+            composition: composition,
+            duration: duration,
+            renderSize: renderSize,
+            frameDuration: frameDuration,
+            renderSegments: plan.renderSegments,
+            settings: update.settings,
+            sceneEvents: update.sceneEvents,
+            sourceInputs: sourceInputs,
+            videoKinds: videoKinds,
+            sourceAspectRatios: sourceAspectRatios,
+            audioInputs: audioInputs,
+            videoAssets: videoAssets,
+            makeInstructions: makeInstructions
+        )
     }
 
     func videoComposition(hiding hiddenKinds: Set<SceneLayerKind>) -> AVVideoComposition {
@@ -1282,7 +1335,12 @@ extension Merger {
         guard !videoSources.isEmpty || !audioSources.isEmpty else {
             throw RecorderError.exportUnavailable
         }
-        let sourceInputs = videoSources.map(\.planningInput)
+        let sourceInputs = FinalExportPlanning.applyingTimelineTrim(
+            FinalExportPlanning.TimelineTrimRequest(
+                sources: videoSources.map(\.planningInput),
+                offset: take.timelineTrimOffset
+            )
+        )
         let outputDimensions = ScreenCaptureGeometry.outputDimensions(for: settings)
         let fallbackRenderSize = CGSize(width: outputDimensions.width, height: outputDimensions.height)
         let exportPlan: FinalExportPlan?
@@ -1309,6 +1367,7 @@ extension Merger {
 
         let composition = AVMutableComposition()
         var compositedSources: [CompositedVideoSource] = []
+        var videoAssets: [SceneLayerKind: AVComposition] = [:]
         for source in videoSources {
             guard let insertion = playbackInsertionByKind[source.kind],
                   CMTimeCompare(insertion.duration, .zero) > 0 else { continue }
@@ -1323,6 +1382,19 @@ extension Merger {
                 of: source.track,
                 at: insertion.compositionStart
             )
+            let videoAsset = AVMutableComposition()
+            guard let videoTrack = videoAsset.addMutableTrack(
+                withMediaType: .video,
+                preferredTrackID: kCMPersistentTrackID_Invalid
+            ) else {
+                throw RecorderError.exportUnavailable
+            }
+            try videoTrack.insertTimeRange(
+                CMTimeRange(start: insertion.sourceStart, duration: insertion.duration),
+                of: source.track,
+                at: insertion.compositionStart
+            )
+            videoAssets[source.kind] = videoAsset
             compositedSources.append(CompositedVideoSource(
                 source: source,
                 compositionTrack: compositionTrack,
@@ -1330,18 +1402,30 @@ extension Merger {
             ))
         }
 
-        let audioPlaybackDuration = audioSources.map(\.duration).max(by: { CMTimeCompare($0, $1) < 0 }) ?? .zero
+        let audioPlaybackDuration = audioSources.map {
+            CMTimeMaximum(.zero, CMTimeSubtract($0.duration, $0.source.sourceStart))
+        }.max(by: { CMTimeCompare($0, $1) < 0 }) ?? .zero
         let playbackDuration = CMTimeMaximum(
             exportPlan?.duration ?? .zero,
             CMTimeMaximum(videoPlaybackDuration, audioPlaybackDuration)
         )
         var audioInputs: [EditorPlaybackComposition.AudioInput] = []
         for audioSource in audioSources {
-            if let input = addOptionalPlaybackAudio(
-                audioSource,
-                to: composition,
-                duration: playbackDuration
-            ) {
+            let videoInsertion: FinalExportSourceInsertion?
+            switch audioSource.source.source {
+            case .screen:
+                videoInsertion = playbackInsertionByKind[.screen]
+            case .camera:
+                videoInsertion = playbackInsertionByKind[.camera]
+            case .microphone, .systemAudio:
+                videoInsertion = nil
+            }
+            if let input = addOptionalPlaybackAudio(PlaybackAudioInsertionRequest(
+                audioSource: audioSource,
+                composition: composition,
+                duration: playbackDuration,
+                videoInsertion: videoInsertion
+            )) {
                 audioInputs.append(input)
             }
         }
@@ -1368,6 +1452,7 @@ extension Merger {
                 ($0.kind, sourceAspectRatio(for: $0))
             }),
             audioInputs: audioInputs,
+            videoAssets: videoAssets,
             makeInstructions: { hiddenKinds, renderSegments in
                 videoCompositionInstructions(
                     sources: compositedSources.filter { !hiddenKinds.contains($0.kind) },
@@ -1414,14 +1499,49 @@ extension Merger {
 
     private static func playbackAudioSources(for take: RecordingTake, settings: RecordingSettings) -> [ExpectedAudioSource] {
         var sources = expectedAudioSources(for: take, settings: settings)
-        let includedSources = Set(sources.map(\.source))
+        var includedSources = Set(sources.map(\.source))
+        let sourceStart = { source in
+            let sourceTimelineOffset = take.sourceTimelineOffsets[source] ?? .zero
+            let offset = CMTimeSubtract(take.timelineTrimOffset, sourceTimelineOffset)
+            return CMTimeCompare(offset, .zero) > 0 ? offset : .zero
+        }
         let sidecars = [
-            ExpectedAudioSource(source: .microphone, url: take.audioURL, volume: Float(settings.microphoneGain)),
-            ExpectedAudioSource(source: .systemAudio, url: take.systemAudioURL, volume: Float(settings.systemAudioGain))
+            ExpectedAudioSource(
+                source: .microphone,
+                url: take.audioURL,
+                volume: Float(settings.microphoneGain),
+                sourceStart: sourceStart(.microphone)
+            ),
+            ExpectedAudioSource(
+                source: .systemAudio,
+                url: take.systemAudioURL,
+                volume: Float(settings.systemAudioGain),
+                sourceStart: sourceStart(.systemAudio)
+            )
         ]
         for sidecar in sidecars where !includedSources.contains(sidecar.source) {
             if FileManager.default.fileExists(atPath: sidecar.url.path) {
                 sources.append(sidecar)
+                includedSources.insert(sidecar.source)
+            }
+        }
+        let embeddedVideoAudio = [
+            ExpectedAudioSource(
+                source: .screen,
+                url: take.screenURL,
+                volume: 1,
+                sourceStart: take.timelineTrimOffset
+            ),
+            ExpectedAudioSource(
+                source: .camera,
+                url: take.cameraURL,
+                volume: 1,
+                sourceStart: take.timelineTrimOffset
+            )
+        ]
+        for embedded in embeddedVideoAudio where settings.enabledSources.contains(embedded.source) {
+            if FileManager.default.fileExists(atPath: embedded.url.path) {
+                sources.append(embedded)
             }
         }
         return sources
@@ -1440,30 +1560,37 @@ extension Merger {
     }
 
     private static func addOptionalPlaybackAudio(
-        _ audioSource: ReadablePlaybackAudioSource,
-        to composition: AVMutableComposition,
-        duration: CMTime
+        _ request: PlaybackAudioInsertionRequest
     ) -> EditorPlaybackComposition.AudioInput? {
-        guard let compositionAudioTrack = composition.addMutableTrack(
+        guard let compositionAudioTrack = request.composition.addMutableTrack(
                 withMediaType: .audio,
                 preferredTrackID: kCMPersistentTrackID_Invalid
         ) else {
             return nil
         }
+        let sourceStart = request.videoInsertion?.sourceStart ?? request.audioSource.source.sourceStart
+        let compositionStart = request.videoInsertion?.compositionStart ?? .zero
+        let remainingCompositionDuration = CMTimeSubtract(request.duration, compositionStart)
+        let remainingSourceDuration = CMTimeSubtract(request.audioSource.duration, sourceStart)
+        let insertDuration = CMTimeMinimum(remainingCompositionDuration, remainingSourceDuration)
+        guard CMTimeCompare(insertDuration, .zero) > 0 else {
+            request.composition.removeTrack(compositionAudioTrack)
+            return nil
+        }
         do {
             try compositionAudioTrack.insertTimeRange(
-                CMTimeRange(start: .zero, duration: CMTimeMinimum(duration, audioSource.duration)),
-                of: audioSource.track,
-                at: .zero
+                CMTimeRange(start: sourceStart, duration: insertDuration),
+                of: request.audioSource.track,
+                at: compositionStart
             )
         } catch {
-            composition.removeTrack(compositionAudioTrack)
+            request.composition.removeTrack(compositionAudioTrack)
             return nil
         }
         return EditorPlaybackComposition.AudioInput(
-            source: audioSource.source.source,
+            source: request.audioSource.source.source,
             track: compositionAudioTrack,
-            volume: max(0, min(2, audioSource.source.volume))
+            volume: max(0, min(2, request.audioSource.source.volume))
         )
     }
 }
@@ -1481,10 +1608,18 @@ private struct ReadablePlaybackAudioSource {
     let duration: CMTime
 }
 
+private struct PlaybackAudioInsertionRequest {
+    let audioSource: ReadablePlaybackAudioSource
+    let composition: AVMutableComposition
+    let duration: CMTime
+    let videoInsertion: FinalExportSourceInsertion?
+}
+
 private struct ExpectedAudioSource {
     let source: CaptureSource
     let url: URL
     let volume: Float
+    var sourceStart: CMTime = .zero
 
     var displayName: String {
         switch source {

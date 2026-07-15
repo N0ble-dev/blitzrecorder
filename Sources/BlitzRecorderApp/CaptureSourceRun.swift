@@ -26,6 +26,7 @@ protocol RemoteCameraCaptureRecording: AnyObject {
 }
 
 protocol MicrophoneCaptureRecording: AnyObject {
+    var recordingTimelineOffset: CMTime { get }
     func start(url: URL, settings: RecordingSettings, timelineStartTime: CMTime?) async throws
     func pause()
     func resume()
@@ -33,22 +34,37 @@ protocol MicrophoneCaptureRecording: AnyObject {
 }
 
 protocol SystemAudioCaptureRecording: AnyObject {
+    var recordingTimelineOffset: CMTime { get }
     func start(url: URL, settings: RecordingSettings, timelineStartTime: CMTime?) async throws
     func pause()
     func resume()
     func stop() async throws -> MediaWriterCompletion
 }
 
+extension MicrophoneCaptureRecording {
+    var recordingTimelineOffset: CMTime { .zero }
+}
+
+extension SystemAudioCaptureRecording {
+    var recordingTimelineOffset: CMTime { .zero }
+}
+
 struct CaptureSourceRunSummary {
     let completions: [CaptureSource: MediaWriterCompletion]
     let stopFailures: [CaptureSource: String]
+    let timelineTrimOffset: CMTime
+    let sourceTimelineOffsets: [CaptureSource: CMTime]
 
     init(
         completions: [CaptureSource: MediaWriterCompletion],
-        stopFailures: [CaptureSource: String] = [:]
+        stopFailures: [CaptureSource: String] = [:],
+        timelineTrimOffset: CMTime = .zero,
+        sourceTimelineOffsets: [CaptureSource: CMTime] = [:]
     ) {
         self.completions = completions
         self.stopFailures = stopFailures
+        self.timelineTrimOffset = timelineTrimOffset
+        self.sourceTimelineOffsets = sourceTimelineOffsets
     }
 
     var hasVideoMedia: Bool {
@@ -122,6 +138,8 @@ final class CaptureSourceRun {
     private var pickedScreenFilter: SCContentFilter?
     private var timelineStartTime: CMTime?
     private var hostTimelineStartTime: UInt64?
+    private var timelineTrimOffset = CMTime.zero
+    private var sourceTimelineOffsets: [CaptureSource: CMTime] = [:]
     private let sourceOrder: [CaptureSource] = [.screen, .microphone, .systemAudio, .camera]
     private let stopOrder: [CaptureSource] = [.microphone, .systemAudio, .camera, .screen]
     private let sourceAdapters: [CaptureSource: CaptureSourceRunAdapter]
@@ -134,6 +152,7 @@ final class CaptureSourceRun {
         let pause: () -> Void
         let resume: () -> Void
         let stop: (RecordingSettings) async throws -> MediaWriterCompletion
+        let timelineOffset: () -> CMTime
     }
 
     init(
@@ -170,6 +189,15 @@ final class CaptureSourceRun {
             try await runPreroll(seconds: prerollSeconds, handler: prerollHandler)
             let timeline = establishTimelineStartIfNeeded()
             try await startEnabledSources(settings: settings, pickedScreenFilter: pickedScreenFilter)
+            let contentStartTime = CMClockGetTime(CMClockGetHostTimeClock())
+            let offset = CMTimeSubtract(contentStartTime, timeline.timelineStartTime)
+            if offset.isValid, offset.seconds.isFinite, CMTimeCompare(offset, .zero) > 0 {
+                timelineTrimOffset = CMTimeConvertScale(
+                    offset,
+                    timescale: 600,
+                    method: .roundHalfAwayFromZero
+                )
+            }
             return timeline
         } catch {
             _ = await stop()
@@ -211,6 +239,14 @@ final class CaptureSourceRun {
             }
             _ = await stopSources(sourcesToStart, settings: settings)
             throw error
+        }
+
+        for source in sourcesToStart {
+            guard let adapter = sourceAdapters[source] else { continue }
+            let offset = adapter.timelineOffset()
+            if offset.isValid, offset.seconds.isFinite, CMTimeCompare(offset, .zero) > 0 {
+                sourceTimelineOffsets[source] = offset
+            }
         }
 
         for source in sourcesToStart {
@@ -272,7 +308,12 @@ final class CaptureSourceRun {
                 stopFailures[source] = Self.sourceStopFailureDescription(error)
             }
         }
-        return CaptureSourceRunSummary(completions: completions, stopFailures: stopFailures)
+        return CaptureSourceRunSummary(
+            completions: completions,
+            stopFailures: stopFailures,
+            timelineTrimOffset: timelineTrimOffset,
+            sourceTimelineOffsets: sourceTimelineOffsets
+        )
     }
 
     private func runPreroll(seconds: Int, handler: ((Int) -> Void)?) async throws {
@@ -325,7 +366,8 @@ final class CaptureSourceRun {
                 resume: { remoteCameraRecorder.resumeRemoteCamera() },
                 stop: { settings in
                     try await remoteCameraRecorder.stopRemoteCamera(take: take, settings: settings)
-                }
+                },
+                timelineOffset: { .zero }
             )
         } else {
             cameraAdapter = CaptureSourceRunAdapter(
@@ -339,7 +381,8 @@ final class CaptureSourceRun {
                 update: { _, _ in },
                 pause: { cameraRecorder.pause() },
                 resume: { cameraRecorder.resume() },
-                stop: { _ in try await cameraRecorder.stop() }
+                stop: { _ in try await cameraRecorder.stop() },
+                timelineOffset: { .zero }
             )
         }
 
@@ -358,7 +401,8 @@ final class CaptureSourceRun {
                 },
                 pause: { screenRecorder.pause() },
                 resume: { screenRecorder.resume() },
-                stop: { _ in try await screenRecorder.stop() }
+                stop: { _ in try await screenRecorder.stop() },
+                timelineOffset: { .zero }
             ),
             .camera: cameraAdapter,
             .microphone: CaptureSourceRunAdapter(
@@ -372,7 +416,8 @@ final class CaptureSourceRun {
                 update: { _, _ in },
                 pause: { audioRecorder.pause() },
                 resume: { audioRecorder.resume() },
-                stop: { _ in try await audioRecorder.stop() }
+                stop: { _ in try await audioRecorder.stop() },
+                timelineOffset: { audioRecorder.recordingTimelineOffset }
             ),
             .systemAudio: CaptureSourceRunAdapter(
                 start: { settings, _, timeline in
@@ -385,7 +430,8 @@ final class CaptureSourceRun {
                 update: { _, _ in },
                 pause: { systemAudioRecorder.pause() },
                 resume: { systemAudioRecorder.resume() },
-                stop: { _ in try await systemAudioRecorder.stop() }
+                stop: { _ in try await systemAudioRecorder.stop() },
+                timelineOffset: { systemAudioRecorder.recordingTimelineOffset }
             )
         ]
         return adapters

@@ -44,7 +44,11 @@ rm -f "$DMG_PATH"
 if ! create-dmg "${CREATE_DMG_ARGS[@]}" >&2; then
   echo "create-dmg Finder layout failed; retrying without Finder AppleScript." >&2
   rm -f "$DMG_PATH"
-  create-dmg --skip-jenkins "${CREATE_DMG_ARGS[@]}" >&2
+  if ! create-dmg --skip-jenkins "${CREATE_DMG_ARGS[@]}" >&2; then
+    echo "create-dmg direct copy failed; retrying with sandbox-safe image creation." >&2
+    rm -f "$DMG_PATH"
+    create-dmg --sandbox-safe "${CREATE_DMG_ARGS[@]}" >&2
+  fi
 fi
 
 "$ROOT/Scripts/dmg/hide-support-files.sh" "$DMG_PATH"

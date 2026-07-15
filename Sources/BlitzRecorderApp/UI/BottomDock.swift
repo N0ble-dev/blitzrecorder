@@ -7,31 +7,40 @@ struct BottomDock: View {
     @Bindable var vm: RecorderViewModel
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             if vm.state == .idle {
                 if let recovery = vm.lastRecoveryOutput {
                     RecoveryAvailableView(vm: vm, recovery: recovery)
+                        .floatingRecordingNotice()
                 } else if !vm.canStartRecording {
                     ReadinessIssueView(vm: vm)
+                        .floatingRecordingNotice()
                 }
             }
 
             RecordingActionRow(vm: vm)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity)
-        .background(.bar)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(.white.opacity(0.08))
-                .frame(height: 1)
-        }
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(.white.opacity(0.08))
-                .frame(height: 1)
-        }
+        .frame(maxWidth: 720)
+        .animation(.easeOut(duration: 0.18), value: vm.state)
+        .animation(.easeOut(duration: 0.18), value: vm.canStartRecording)
+    }
+}
+
+private extension View {
+    func floatingRecordingNotice() -> some View {
+        padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .background {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(.black.opacity(0.78))
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(.white.opacity(0.10), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.32), radius: 18, y: 8)
     }
 }
 
@@ -40,57 +49,54 @@ private struct RecordingActionRow: View {
     var forcesSavedChip = false
 
     var body: some View {
-        HStack(spacing: 24) {
-            HStack(spacing: 10) {
-                switch vm.state {
-                case .idle:
-                    RecordingSettingsShortcut(vm: vm)
-                case .recording, .paused:
-                    PauseButton(vm: vm)
-                case .starting, .finishing:
-                    EmptyView()
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .trailing)
+        HStack(spacing: 8) {
+            switch vm.state {
+            case .idle:
+                RecordButton(vm: vm)
 
-            RecordButton(vm: vm)
-
-            HStack(spacing: 10) {
-                switch vm.state {
-                case .idle:
-                    if let savedURL = savedExportURL {
-                        SavedRecordingChip(
-                            vm: vm,
-                            url: savedURL,
-                            sourceTakeURL: vm.lastExportedSourceTakeURL,
-                            warning: vm.lastExportWarning
-                        )
-                    } else if vm.lastPostRecordingProjectOutput != nil {
-                        ProjectReadyChip(vm: vm)
-                    } else if let message = vm.idleStatusMessage {
-                        Text(message)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.55))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: 320, alignment: .leading)
-                            .help(message)
-                    }
-                case .starting:
-                    SessionStatusText(title: vm.sessionProgressTitle, detail: vm.sessionProgressDetail)
-                case .recording, .paused:
-                    ElapsedTimeText(isPaused: vm.state == .paused, elapsed: vm.formattedElapsed)
-                case .finishing:
-                    FinishingProgressStatus(
-                        title: vm.sessionProgressTitle,
-                        detail: vm.sessionProgressDetail,
-                        progress: vm.sessionProgressValue,
-                        percent: vm.sessionProgressLabel
+                if let savedURL = savedExportURL {
+                    TransportDivider()
+                    SavedRecordingChip(
+                        vm: vm,
+                        url: savedURL,
+                        sourceTakeURL: vm.lastExportedSourceTakeURL,
+                        warning: vm.lastExportWarning
                     )
+                } else if vm.lastPostRecordingProjectOutput != nil {
+                    TransportDivider()
+                    ProjectReadyChip(vm: vm)
                 }
+            case .starting:
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 40, height: 40)
+                SessionStatusText(title: vm.sessionProgressTitle, detail: vm.sessionProgressDetail)
+            case .recording, .paused:
+                PauseButton(vm: vm)
+                TransportDivider()
+                ElapsedTimeText(isPaused: vm.state == .paused, elapsed: vm.formattedElapsed)
+                RecordButton(vm: vm)
+            case .finishing:
+                FinishingProgressStatus(
+                    title: vm.sessionProgressTitle,
+                    detail: vm.sessionProgressDetail,
+                    progress: vm.sessionProgressValue,
+                    percent: vm.sessionProgressLabel
+                )
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .padding(6)
+        .background {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(.black.opacity(0.80))
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(.ultraThinMaterial)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.38), radius: 22, y: 10)
     }
 
     private var savedExportURL: URL? {
@@ -102,6 +108,15 @@ private struct RecordingActionRow: View {
     }
 }
 
+private struct TransportDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(.white.opacity(0.10))
+            .frame(width: 1, height: 26)
+            .padding(.horizontal, 2)
+    }
+}
+
 private struct RecordingSettingsShortcut: View {
     @Bindable var vm: RecorderViewModel
     @State private var hovering = false
@@ -110,25 +125,19 @@ private struct RecordingSettingsShortcut: View {
         Button {
             vm.onPresentSettings?(.recording)
         } label: {
-            HStack(spacing: 7) {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 13, weight: .semibold))
-                    .symbolRenderingMode(.hierarchical)
-                Text(settingsSummary)
-                    .font(.system(size: 12, weight: .semibold))
-                    .monospacedDigit()
-                    .fixedSize()
-            }
-            .foregroundStyle(.white.opacity(hovering ? 0.92 : 0.58))
-            .padding(.horizontal, 12)
-            .frame(height: 40)
-            .contentShape(.rect)
+            Image(systemName: "gearshape")
+                .font(.system(size: 14, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(.white.opacity(hovering ? 0.92 : 0.58))
+                .frame(width: 40, height: 40)
+                .background(hovering ? BlitzUI.controlFill : .clear, in: .circle)
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
         .pointingHandCursor()
-        .help("Export settings")
+        .help("Recording settings — \(settingsSummary)")
     }
 
     private var settingsSummary: String {
@@ -162,44 +171,41 @@ private struct ProjectReadyChip: View {
     @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Button {
                 vm.openEditor()
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: "rectangle.and.pencil.and.ellipsis")
+                    Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 13, weight: .semibold))
                         .symbolRenderingMode(.hierarchical)
                         .foregroundStyle(BlitzUI.mint)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Project ready")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.90))
-                        Text(projectDetail)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.52))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
+                    Text("Edit recording")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.94))
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white.opacity(hovering ? 0.76 : 0.46))
                 }
-                .padding(.horizontal, 10)
+                .padding(.horizontal, 14)
                 .frame(height: 40)
+                .background(
+                    BlitzUI.mint.opacity(hovering ? 0.18 : 0.11),
+                    in: .rect(cornerRadius: 12)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(BlitzUI.mint.opacity(hovering ? 0.42 : 0.24), lineWidth: 1)
+                }
+                .contentShape(.rect(cornerRadius: 12))
             }
-            .blitzGlassButton()
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
             .pointingHandCursor()
-            .help("Open this take in Edit")
+            .help("Open \(projectDetail) in Edit")
 
             ProjectActionsMenu(vm: vm)
-
-            if hovering {
-                DockDismissButton(help: "Clear and get ready for the next take") {
-                    vm.clearPostRecordingStatus()
-                }
-            }
         }
-        .frame(maxWidth: 440, alignment: .leading)
-        .contentShape(.rect)
-        .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.15), value: hovering)
         .contextMenu {
             Button("Open in Edit") { vm.openEditor() }
@@ -484,17 +490,25 @@ private struct ElapsedTimeText: View {
     let elapsed: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(isPaused ? BlitzUI.warning : BlitzUI.recordRed)
+                .frame(width: 7, height: 7)
+                .shadow(color: (isPaused ? BlitzUI.warning : BlitzUI.recordRed).opacity(0.45), radius: 5)
+
             Text(elapsed)
-                .font(.system(size: 20, weight: .medium, design: .monospaced))
+                .font(.system(size: 16, weight: .semibold, design: .monospaced))
                 .monospacedDigit()
                 .foregroundStyle(.white.opacity(isPaused ? 0.55 : 0.95))
+
             if isPaused {
                 Text("Paused")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(BlitzUI.warning)
             }
         }
+        .padding(.horizontal, 8)
+        .frame(minWidth: 112, minHeight: 44, alignment: .leading)
     }
 }
 
@@ -505,12 +519,15 @@ private struct FinishingProgressStatus: View {
     let percent: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
                 Text(title)
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.72))
+                    .foregroundStyle(.white.opacity(0.82))
                     .lineLimit(1)
+                Spacer(minLength: 8)
                 Text(percent)
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .monospacedDigit()
@@ -519,8 +536,10 @@ private struct FinishingProgressStatus: View {
             ProgressView(value: progress)
                 .progressViewStyle(.linear)
                 .tint(.white.opacity(0.85))
-                .frame(width: 200)
+                .frame(width: 240)
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
         .help(detail ?? title)
     }
 }
@@ -812,17 +831,26 @@ private struct DetailsLink: View {
 
 private struct PauseButton: View {
     @Bindable var vm: RecorderViewModel
+    @State private var hovering = false
 
     var body: some View {
         Button {
             vm.togglePause()
         } label: {
-            Image(systemName: symbol)
-                .font(.system(size: 14, weight: .bold))
-                .frame(width: 40, height: 40)
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(.white.opacity(hovering ? 0.14 : 0.08))
+                Image(systemName: symbol)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.92))
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(.rect(cornerRadius: 12))
         }
-        .blitzGlassButton()
+        .buttonStyle(RecordButtonPressStyle())
         .disabled(!isEnabled)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
         .pointingHandCursor()
         .help(helpText)
     }
@@ -843,7 +871,7 @@ private struct PauseButton: View {
 private struct RecordButtonPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.94 : 1)
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
@@ -851,26 +879,26 @@ private struct RecordButtonPressStyle: ButtonStyle {
 private struct RecordButton: View {
     @Bindable var vm: RecorderViewModel
 
-    private let diameter: CGFloat = 56
     @State private var isHovering = false
-
-    private var lifted: Bool { isHovering && enabled && !dimmed }
 
     var body: some View {
         Button {
             vm.primaryAction()
         } label: {
-            ZStack {
-                Circle()
-                    .strokeBorder(.white.opacity(0.14), lineWidth: 2)
-                    .frame(width: diameter, height: diameter)
-
+            HStack(spacing: 9) {
                 recordGlyph
+                Text(actionTitle)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.96))
             }
-            .frame(width: diameter, height: diameter)
-            .contentShape(.circle)
-            .scaleEffect(lifted ? 1.03 : 1)
-            .animation(.easeOut(duration: 0.16), value: lifted)
+            .padding(.horizontal, 16)
+            .frame(minWidth: vm.state == .idle ? 112 : 94, minHeight: 44)
+            .background(buttonFill, in: .rect(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(BlitzUI.recordRed.opacity(isHovering ? 0.65 : 0.38), lineWidth: 1)
+            }
+            .contentShape(.rect(cornerRadius: 12))
         }
         .buttonStyle(RecordButtonPressStyle())
         .opacity(dimmed ? 0.5 : 1)
@@ -886,24 +914,23 @@ private struct RecordButton: View {
         case .idle:
             Circle()
                 .fill(BlitzUI.recordRed)
-                .frame(width: diameter - 8, height: diameter - 8)
+                .frame(width: 12, height: 12)
+                .shadow(color: BlitzUI.recordRed.opacity(0.55), radius: 5)
         case .recording, .paused:
-            ZStack {
-                Circle()
-                    .strokeBorder(BlitzUI.recordRed, lineWidth: 4)
-                    .frame(width: diameter - 6, height: diameter - 6)
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(.white.opacity(0.95))
-                    .frame(width: 18, height: 18)
-            }
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(.white.opacity(0.96))
+                .frame(width: 12, height: 12)
         case .starting:
             ProgressView()
                 .controlSize(.small)
         case .finishing:
-            Circle()
-                .fill(BlitzUI.recordRed)
-                .frame(width: diameter - 8, height: diameter - 8)
+            ProgressView()
+                .controlSize(.small)
         }
+    }
+
+    private var buttonFill: Color {
+        BlitzUI.recordRed.opacity(isHovering ? 0.32 : 0.22)
     }
 
     private var helpText: String {
@@ -912,6 +939,15 @@ private struct RecordButton: View {
         case .recording, .paused: return "Stop recording"
         case .starting: return "Please wait"
         case .finishing: return "Saving…"
+        }
+    }
+
+    private var actionTitle: String {
+        switch vm.state {
+        case .idle: return "Record"
+        case .recording, .paused: return "Stop"
+        case .starting: return "Starting"
+        case .finishing: return "Saving"
         }
     }
 

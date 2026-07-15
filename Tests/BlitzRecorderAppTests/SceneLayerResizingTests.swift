@@ -3,6 +3,20 @@ import CoreGraphics
 import XCTest
 
 final class SceneLayerResizingTests: XCTestCase {
+    func testSettingAspectRatioPreservesCenterAndArea() {
+        let frame = CGRect(x: 0.1, y: 0.2, width: 0.4, height: 0.3)
+
+        let resized = SceneLayerResizing.settingAspectRatio(.init(
+            frame: frame,
+            aspectRatio: 1
+        ))
+
+        XCTAssertEqual(resized.midX, frame.midX, accuracy: 0.0001)
+        XCTAssertEqual(resized.midY, frame.midY, accuracy: 0.0001)
+        XCTAssertEqual(resized.width / resized.height, 1, accuracy: 0.0001)
+        XCTAssertEqual(resized.width * resized.height, frame.width * frame.height, accuracy: 0.0001)
+    }
+
     func testAspectLockedHeightResizePreservesAspectRatio() {
         let frame = CGRect(x: 0.1, y: 0.2, width: 0.4, height: 0.3)
 
@@ -17,6 +31,19 @@ final class SceneLayerResizingTests: XCTestCase {
             resized,
             equals: CGRect(x: 0.0333333333, y: 0.2, width: 0.5333333333, height: 0.4)
         )
+    }
+
+    func testAspectLockedCornerResizeProjectsSmoothlyOntoFrameDiagonal() {
+        let frame = CGRect(x: 0.1, y: 0.2, width: 0.4, height: 0.3)
+
+        let resized = SceneLayerResizing.resized(
+            frame,
+            delta: CGPoint(x: 0.1, y: 0.05),
+            anchor: .topRight,
+            aspectRatio: frame.width / frame.height
+        )
+
+        XCTAssertRect(resized, equals: CGRect(x: 0.1, y: 0.2, width: 0.488, height: 0.366))
     }
 
     func testCameraResizeDoesNotRequireScreenAdjustment() {

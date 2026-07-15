@@ -4,8 +4,6 @@ import SwiftUI
 struct SourcesSidebar: View {
     @Bindable var vm: RecorderViewModel
 
-    @State private var expandedSources: Set<CaptureSource> = []
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -24,7 +22,7 @@ struct SourcesSidebar: View {
 
     private var devicesHeader: some View {
         HStack(spacing: 8) {
-            Text("Devices")
+            Text("Sources")
                 .font(.system(size: 18, weight: .bold))
                 .foregroundStyle(.white.opacity(0.94))
 
@@ -54,29 +52,14 @@ struct SourcesSidebar: View {
 
     private var devicesSection: some View {
         VStack(spacing: 8) {
-            if shownSources.isEmpty {
-                EmptySourceHint(title: "No devices yet. Use + to add one.")
-            }
-            ForEach(shownVideoOrder, id: \.self) { kind in
-                let source = captureSource(for: kind)
-                Group {
-                    if expandedSources.contains(source) {
-                        deviceCard(for: source)
-                    } else {
-                        deviceCard(for: source)
-                            .draggable(kind.rawValue) {
-                                deviceCard(for: source).opacity(0.85)
-                            }
-                    }
-                }
-                .dropDestination(for: String.self) { items, _ in
-                    return handleDrop(items, onto: kind)
-                }
-            }
-            ForEach(shownAudioSources, id: \.self) { source in
+            ForEach(displayedSources, id: \.self) { source in
                 deviceCard(for: source)
             }
         }
+    }
+
+    private var displayedSources: [CaptureSource] {
+        [.screen, .camera, .microphone, .systemAudio]
     }
 
     @ViewBuilder
@@ -89,7 +72,6 @@ struct SourcesSidebar: View {
                 subtitle: vm.selectedScreenSourceDisplayName,
                 status: sourceStatus(for: .screen),
                 sourceIcon: selectedScreenSourceOption?.icon,
-                isExpanded: expansionBinding(for: .screen),
                 vm: vm
             )
         case .camera:
@@ -98,56 +80,27 @@ struct SourcesSidebar: View {
                 title: "Camera",
                 subtitle: vm.selectedCameraDisplayName,
                 status: sourceStatus(for: .camera),
-                isExpanded: expansionBinding(for: .camera),
                 vm: vm
             )
         case .microphone:
             DeviceCard(
                 source: .microphone,
-                title: "Mic",
+                title: "Microphone",
                 subtitle: vm.selectedMicrophoneDisplayName,
                 status: sourceStatus(for: .microphone),
-                isExpanded: expansionBinding(for: .microphone),
                 levels: vm.micLevels,
                 vm: vm
             )
         case .systemAudio:
             DeviceCard(
                 source: .systemAudio,
-                title: "System",
+                title: "System audio",
                 subtitle: "Mac audio",
                 status: sourceStatus(for: .systemAudio),
-                isExpanded: expansionBinding(for: .systemAudio),
                 levels: vm.sysLevels,
                 vm: vm
             )
         }
-    }
-
-    private func expansionBinding(for source: CaptureSource) -> Binding<Bool> {
-        Binding(
-            get: { expandedSources.contains(source) },
-            set: { isOpen in
-                if isOpen {
-                    expandedSources.insert(source)
-                } else {
-                    expandedSources.remove(source)
-                }
-            }
-        )
-    }
-
-    private var shownSources: [CaptureSource] {
-        shownVideoOrder.map(captureSource(for:)) + shownAudioSources
-    }
-
-    private var shownVideoOrder: [SceneLayerKind] {
-        SceneLayoutProjection.frontToBackOrder(for: vm.settings.sceneLayout)
-            .filter { vm.isSourceConfigured(captureSource(for: $0)) }
-    }
-
-    private var shownAudioSources: [CaptureSource] {
-        [.microphone, .systemAudio].filter { vm.isSourceConfigured($0) }
     }
 
     private var inactiveSources: [CaptureSource] {
@@ -167,32 +120,11 @@ struct SourcesSidebar: View {
         return vm.availableScreenSources.first { $0.binding == binding }
     }
 
-    private func handleDrop(_ items: [String], onto target: SceneLayerKind) -> Bool {
-        guard vm.canEditScene else { return false }
-        guard let raw = items.first,
-              let dropped = SceneLayerKind(rawValue: raw),
-              dropped != target else { return false }
-
-        guard let order = SceneLayoutProjection.reorderedBackToFrontOrder(
-            moving: dropped,
-            onto: target,
-            in: vm.settings.sceneLayout
-        ) else { return false }
-
-        vm.setSceneLayerOrder(order)
-        return true
-    }
-
-    private func captureSource(for kind: SceneLayerKind) -> CaptureSource {
-        switch kind {
-        case .screen:
-            return .screen
-        case .camera:
-            return .camera
-        }
-    }
-
     private func sourceStatus(for source: CaptureSource) -> SourceRowStatus {
+        guard vm.isSourceConfigured(source) else {
+            return SourceRowStatus(label: "Off", tone: .muted)
+        }
+
         if let recordingStatus = recordingStateStatus {
             return recordingStatus
         }
@@ -315,12 +247,7 @@ private struct WebcamSourceMenu: View {
     }
 
 	var body: some View {
-        BlitzGlassMenu(entries: entries, menuWidth: 260) {
-            BlitzMenuSelectorLabel(title: selectedName, icon: selectedIcon, enabled: enabled)
-        }
-        .controlSize(.small)
-        .disabled(vm.state != .idle)
-        .pointingHandCursor()
+        BlitzSourcePicker(model: pickerModel)
         .help("Choose camera source")
     }
 
@@ -328,48 +255,73 @@ private struct WebcamSourceMenu: View {
         vm.isRemoteCameraSelected ? "iphone.gen3" : "video"
     }
 
-    private var entries: [BlitzMenuEntry] {
-        var entries: [BlitzMenuEntry] = [
-            .item(BlitzMenuItem(title: "Detect iPhone Camera", systemImage: "iphone.radiowaves.left.and.right") {
-                vm.startRemoteCameraDiscovery()
-            }),
-            .divider,
-            .item(BlitzMenuItem(
+    private var pickerModel: BlitzSourcePickerModel {
+        BlitzSourcePickerModel(
+            title: selectedName,
+            subtitle: vm.isRemoteCameraSelected ? "Wireless iPhone camera" : "Camera input",
+            systemImage: selectedIcon,
+            icon: nil,
+            sections: cameraSections,
+            actions: [
+                BlitzSourcePickerItem(
+                    title: "Find an iPhone",
+                    subtitle: "Connect a wireless camera",
+                    systemImage: "iphone.radiowaves.left.and.right",
+                    icon: nil,
+                    thumbnail: nil,
+                    isSelected: false
+                ) {
+                    vm.startRemoteCameraDiscovery()
+                }
+            ],
+            layout: .list,
+            enabled: enabled && vm.state == .idle
+        )
+    }
+
+    private var cameraSections: [BlitzSourcePickerSection] {
+        var localItems = [
+            BlitzSourcePickerItem(
                 title: "Default camera",
+                subtitle: "Follow the macOS default",
                 systemImage: "video",
+                icon: nil,
+                thumbnail: nil,
                 isSelected: vm.settings.selectedCameraID == nil
             ) {
                 vm.setCamera(nil)
-            })
+            }
         ]
-
-        if !vm.remoteCameraOptions.isEmpty {
-            entries.append(.divider)
-            for option in vm.remoteCameraOptions {
-                entries.append(.item(BlitzMenuItem(
-                    title: option.name,
-                    systemImage: "iphone.gen3",
-                    isSelected: vm.settings.selectedCameraID == option.id
-                ) {
-                    vm.setCamera(option.id)
-                }))
+        localItems += vm.localCameraOptions.map { option in
+            BlitzSourcePickerItem(
+                title: option.name,
+                subtitle: "Connected to this Mac",
+                systemImage: "video",
+                icon: nil,
+                thumbnail: nil,
+                isSelected: vm.settings.selectedCameraID == option.id
+            ) {
+                vm.setCamera(option.id)
             }
         }
 
-        if !vm.localCameraOptions.isEmpty {
-            entries.append(.divider)
-            for option in vm.localCameraOptions {
-                entries.append(.item(BlitzMenuItem(
-                    title: option.name,
-                    systemImage: "video",
-                    isSelected: vm.settings.selectedCameraID == option.id
-                ) {
-                    vm.setCamera(option.id)
-                }))
+        let remoteItems = vm.remoteCameraOptions.map { option in
+            BlitzSourcePickerItem(
+                title: option.name,
+                subtitle: "Wireless iPhone camera",
+                systemImage: "iphone.gen3",
+                icon: nil,
+                thumbnail: nil,
+                isSelected: vm.settings.selectedCameraID == option.id
+            ) {
+                vm.setCamera(option.id)
             }
         }
 
-        return entries
+        return [
+            BlitzSourcePickerSection(title: "This Mac", items: localItems),
+            BlitzSourcePickerSection(title: "iPhone cameras", items: remoteItems)
+        ]
     }
 }
 
@@ -403,54 +355,26 @@ private struct DeviceCard: View {
     let subtitle: String
     let status: SourceRowStatus
     var sourceIcon: NSImage?
-    @Binding var isExpanded: Bool
     var levels: TrackLevels?
     @Bindable var vm: RecorderViewModel
 
     private var isSelected: Bool { vm.selectedSource?.source == source }
-    private var isVideoSource: Bool { source == .screen || source == .camera }
+    private var isEnabled: Bool { vm.isSourceConfigured(source) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-
-            if isExpanded {
-                Divider()
-                    .overlay(BlitzUI.separator)
-                    .padding(.horizontal, 12)
-
-                expandedBody
-                    .padding(.horizontal, 12)
-                    .padding(.top, 10)
-                    .padding(.bottom, 12)
-            }
-        }
-        .blitzCard(cornerRadius: 10, selected: isSelected)
+        header
+        .blitzCard(cornerRadius: 12, selected: isSelected && isEnabled)
+        .opacity(isEnabled ? 1 : 0.62)
         .pointingHandCursor()
-        .contextMenu {
-            if source == .screen {
-                Button("Pick Screen...") {
-                    vm.pickScreen()
-                }
-                .disabled(vm.state != .idle)
-            }
-            Button("Remove \(title)", role: .destructive) {
-                vm.removeSource(source)
-            }
-            .disabled(vm.state != .idle)
-        }
     }
 
     private var header: some View {
         HStack(spacing: 8) {
             Button {
                 vm.selectSource(source)
-                withAnimation(.easeOut(duration: 0.16)) {
-                    isExpanded = true
-                }
             } label: {
                 HStack(spacing: 11) {
-                    BlitzIconTile(symbolName: source.symbolName, isSelected: isSelected, icon: sourceIcon)
+                    sourceIdentity
 
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 6) {
@@ -479,50 +403,39 @@ private struct DeviceCard: View {
                 .contentShape(.rect(cornerRadius: 10))
             }
             .buttonStyle(.plain)
+            .disabled(!isEnabled)
 
-            Button {
-                withAnimation(.easeOut(duration: 0.16)) {
-                    isExpanded.toggle()
-                }
-            } label: {
-                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.45))
-                    .frame(width: 22, height: 22)
-                    .contentShape(.rect(cornerRadius: 6))
-            }
-            .buttonStyle(.plain)
-            .pointingHandCursor()
-            .help(isExpanded ? "Collapse" : "Expand")
+            Toggle("", isOn: Binding(
+                get: { isEnabled },
+                set: { _ in vm.toggleSource(source) }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .labelsHidden()
+            .disabled(vm.state != .idle)
+            .tint(BlitzUI.mint)
+            .help(isEnabled ? "Turn off \(title)" : "Turn on \(title)")
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.vertical, 12)
+        .frame(minHeight: 72)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
-    private var expandedBody: some View {
-        switch source {
-        case .screen:
-            ScreenSourceInspector(vm: vm, enabled: vm.isSourceConfigured(.screen))
-        case .camera:
-            CameraSourceInspector(vm: vm, enabled: vm.isSourceConfigured(.camera))
-        case .microphone:
-            AudioSourceInspector(
-                title: "Mic gain",
-                source: .microphone,
-                levels: vm.micLevels,
-                gain: Binding(get: { vm.settings.microphoneGain }, set: { vm.setMicrophoneGain($0) }),
-                vm: vm
-            )
-        case .systemAudio:
-            AudioSourceInspector(
-                title: "System gain",
-                source: .systemAudio,
-                levels: vm.sysLevels,
-                gain: Binding(get: { vm.settings.systemAudioGain }, set: { vm.setSystemAudioGain($0) }),
-                vm: vm
-            )
+    private var sourceIdentity: some View {
+        if let sourceIcon {
+            Image(nsImage: sourceIcon)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 22, height: 22)
+                .clipShape(.rect(cornerRadius: 5))
+        } else {
+            Image(systemName: source.symbolName)
+                .font(.system(size: 14, weight: .medium))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(.white.opacity(isSelected ? 0.82 : 0.48))
+                .frame(width: 22, height: 22)
         }
     }
 }
@@ -546,6 +459,42 @@ private enum SourceRowStatusTone: Equatable {
     }
 }
 
+struct SelectedSourceInspector: View {
+    @Bindable var vm: RecorderViewModel
+
+    @ViewBuilder
+    var body: some View {
+        switch vm.selectedSource?.source ?? .screen {
+        case .screen:
+            ScreenSourceInspector(vm: vm, enabled: vm.isSourceConfigured(.screen))
+        case .camera:
+            CameraSourceInspector(vm: vm, enabled: vm.isSourceConfigured(.camera))
+        case .microphone:
+            AudioSourceInspector(
+                title: "Input level",
+                source: .microphone,
+                levels: vm.micLevels,
+                gain: Binding(
+                    get: { vm.settings.microphoneGain },
+                    set: { vm.setMicrophoneGain($0) }
+                ),
+                vm: vm
+            )
+        case .systemAudio:
+            AudioSourceInspector(
+                title: "Output level",
+                source: .systemAudio,
+                levels: vm.sysLevels,
+                gain: Binding(
+                    get: { vm.settings.systemAudioGain },
+                    set: { vm.setSystemAudioGain($0) }
+                ),
+                vm: vm
+            )
+        }
+    }
+}
+
 private struct ScreenSourceInspector: View {
     @Bindable var vm: RecorderViewModel
     let enabled: Bool
@@ -553,29 +502,16 @@ private struct ScreenSourceInspector: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             captureSourceRow
+            ScreenWindowZoomControl(vm: vm, enabled: enabled)
         }
         .settingsPanelStyle()
     }
 
     private var captureSourceRow: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                inspectorIcon(selectedScreenSourceSystemImage, enabled: enabled)
-                inspectorLabel("Source", enabled: enabled)
-                Spacer(minLength: 0)
-            }
+            inspectorLabel("Source", enabled: enabled)
 
-            BlitzGlassMenu(entries: screenSourceMenuEntries, menuWidth: 300) {
-                ScreenSourceSelectorLabel(
-                    title: captureSourceLabel,
-                    systemImage: selectedScreenSourceSystemImage,
-                    icon: selectedScreenSourceIcon,
-                    enabled: enabled
-                )
-            }
-            .controlSize(.small)
-            .disabled(vm.state != .idle)
-            .pointingHandCursor()
+            BlitzSourcePicker(model: pickerModel)
             .help("Choose a display, app, or window")
         }
     }
@@ -611,84 +547,186 @@ private struct ScreenSourceInspector: View {
         }
     }
 
-    private var screenSourceMenuEntries: [BlitzMenuEntry] {
-        var entries: [BlitzMenuEntry] = []
-        appendScreenSourceSection(.application, title: "Apps", to: &entries)
-        appendScreenSourceSection(.window, title: "Windows", to: &entries)
-        appendScreenSourceSection(.display, title: "Displays", to: &entries)
-        if !entries.isEmpty {
-            entries.append(.divider)
+    private var pickerModel: BlitzSourcePickerModel {
+        var actions: [BlitzSourcePickerItem] = []
+        if vm.shouldShowAppWindowSourcePermissionHint {
+            actions.append(
+                BlitzSourcePickerItem(
+                    title: "Enable Screen Recording",
+                    subtitle: "Required to list apps and windows",
+                    systemImage: "lock.open",
+                    icon: nil,
+                    thumbnail: nil,
+                    isSelected: false
+                ) {
+                    vm.applyScreenRecordingPermission()
+                }
+            )
         }
-        entries.append(.item(BlitzMenuItem(
-            title: "System Picker...",
-            subtitle: "Choose with macOS",
-            systemImage: "rectangle.dashed"
-        ) {
-            vm.pickScreen()
-        }))
-        return entries
+
+        return BlitzSourcePickerModel(
+            title: captureSourceLabel,
+            subtitle: selectedScreenSourceKindLabel,
+            systemImage: selectedScreenSourceSystemImage,
+            icon: selectedScreenSourceIcon,
+            sections: [
+                screenSourceSection((kind: .application, title: "Apps")),
+                screenSourceSection((kind: .window, title: "Windows")),
+                screenSourceSection((kind: .display, title: "Displays"))
+            ],
+            actions: actions,
+            layout: .thumbnails,
+            enabled: enabled && vm.state == .idle
+        )
     }
 
-    private func appendScreenSourceSection(
-        _ kind: ScreenSourceBinding.Kind,
-        title: String,
-        to entries: inout [BlitzMenuEntry]
-    ) {
-        let options = vm.availableScreenSources.filter { $0.binding.kind == kind }
-        guard !options.isEmpty else { return }
-        entries.append(.section(title))
-        entries += options.map { option in
-            .item(BlitzMenuItem(
-                title: option.title,
-                subtitle: option.subtitle,
-                systemImage: option.systemImage,
-                icon: option.icon,
-                isSelected: !vm.settings.usesPickedScreenContent && vm.settings.screenSourceBinding == option.binding
-            ) {
-                vm.setScreenSource(option.binding)
-            })
-        }
+    private func screenSourceSection(
+        _ request: (kind: ScreenSourceBinding.Kind, title: String)
+    ) -> BlitzSourcePickerSection {
+        let options = vm.availableScreenSources.filter { $0.binding.kind == request.kind }
+        return BlitzSourcePickerSection(
+            title: request.title,
+            items: options.map { option in
+                BlitzSourcePickerItem(
+                    title: option.title,
+                    subtitle: option.subtitle,
+                    systemImage: option.systemImage,
+                    icon: option.icon,
+                    thumbnail: vm.screenSourceThumbnails[option.id],
+                    isSelected: !vm.settings.usesPickedScreenContent
+                        && vm.settings.screenSourceBinding == option.binding
+                ) {
+                    vm.setScreenSource(option.binding)
+                }
+            }
+        )
     }
 
+    private var selectedScreenSourceKindLabel: String {
+        if vm.settings.usesPickedScreenContent {
+            return "Screen capture"
+        }
+        switch vm.settings.screenSourceBinding?.kind {
+        case .application:
+            return "Application capture"
+        case .window:
+            return "Window capture"
+        case .display, nil:
+            return "Display capture"
+        }
+    }
 }
 
-private struct ScreenSourceSelectorLabel: View {
-    let title: String
-    let systemImage: String
-    let icon: NSImage?
+private struct ScreenWindowZoomControl: View {
+    @Bindable var vm: RecorderViewModel
     let enabled: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
-            if let icon {
-                Image(nsImage: icon)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 16, height: 16)
-                    .clipShape(.rect(cornerRadius: 4))
-            } else {
-                Image(systemName: systemImage)
-                    .font(.system(size: 10, weight: .semibold))
-                    .symbolRenderingMode(.hierarchical)
-                    .frame(width: 16, height: 16)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("Screen zoom")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(enabled ? 0.82 : 0.38))
+
+                Spacer(minLength: 0)
+
+                Text("\(Int((vm.targetWindowZoom * 100).rounded()))%")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .monospacedDigit()
+                    .foregroundStyle(.white.opacity(enabled ? 0.7 : 0.32))
             }
 
-            Text(title)
+            HStack(spacing: 7) {
+                Button {
+                    vm.zoomTargetWindowFit(by: -0.05)
+                } label: {
+                    Image(systemName: "minus")
+                        .font(.system(size: 10, weight: .bold))
+                        .frame(width: 26, height: 24)
+                }
+                .blitzGlassButton()
+                .disabled(!canZoomOut)
+
+                Slider(
+                    value: Binding(
+                        get: { Double(vm.targetWindowZoom) },
+                        set: { vm.setTargetWindowZoom(CGFloat($0)) }
+                    ),
+                    in: WindowZoomGeometry.minimumZoom...WindowZoomGeometry.maximumZoom,
+                    step: 0.05
+                )
+                .controlSize(.small)
+                .tint(BlitzUI.mint)
+                .disabled(!canEdit)
+
+                Button {
+                    vm.zoomTargetWindowFit(by: 0.05)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .bold))
+                        .frame(width: 26, height: 24)
+                }
+                .blitzGlassButton()
+                .disabled(!canZoomIn)
+            }
+
+            HStack {
+                Text("50%")
+                Spacer(minLength: 0)
+                Button("Reset") {
+                    vm.resetTargetWindowZoom()
+                }
                 .font(.system(size: 11, weight: .semibold))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .minimumScaleFactor(0.82)
+                .buttonStyle(.plain)
+                .foregroundStyle(BlitzUI.mint.opacity(canEdit ? 0.82 : 0.3))
+                .disabled(!canEdit || abs(vm.targetWindowZoom - 1) < 0.001)
+                Spacer(minLength: 0)
+                Text("150%")
+            }
+            .font(.system(size: 9, weight: .medium, design: .monospaced))
+            .monospacedDigit()
+            .foregroundStyle(.white.opacity(enabled ? 0.4 : 0.22))
 
-            Spacer(minLength: 4)
-
-            Image(systemName: "chevron.down")
-                .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(.white.opacity(enabled ? 0.42 : 0.24))
+            if !vm.hasAccessibilityAccessForWindowControls {
+                Button {
+                    vm.requestAccessibilityForWindowControls()
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "lock.open")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text("Enable window zoom")
+                            .font(.system(size: 10, weight: .semibold))
+                        Spacer(minLength: 0)
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 8, weight: .bold))
+                    }
+                    .foregroundStyle(BlitzUI.mint.opacity(enabled ? 0.82 : 0.3))
+                    .padding(.horizontal, 9)
+                    .frame(height: 30)
+                    .frame(maxWidth: .infinity)
+                }
+                .blitzGlassButton()
+                .disabled(!enabled || vm.state != .idle)
+                .help("Allow Accessibility so BlitzRecorder can resize the selected window")
+            } else if !vm.canShowScreenWindowFitControls {
+                Text("Select an app or window to apply zoom.")
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.4))
+            }
         }
-        .foregroundStyle(.white.opacity(enabled ? 0.78 : 0.34))
-        .padding(.horizontal, 9)
-        .frame(height: 28)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .opacity(enabled ? 1 : 0.55)
+    }
+
+    private var canEdit: Bool {
+        enabled && vm.state == .idle && vm.canShowScreenWindowFitControls
+    }
+
+    private var canZoomOut: Bool {
+        canEdit && vm.targetWindowZoom > WindowZoomGeometry.minimumZoom
+    }
+
+    private var canZoomIn: Bool {
+        canEdit && vm.targetWindowZoom < WindowZoomGeometry.maximumZoom
     }
 }
 

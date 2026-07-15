@@ -14,6 +14,20 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
     private var startupContinuation: CheckedContinuation<Void, Error>?
     private var startupTimeoutTask: Task<Void, Never>?
     private var hasProducedStartupSample = false
+    private var timelineStartTime: CMTime?
+    private var firstSampleTime: CMTime?
+
+    var recordingTimelineOffset: CMTime {
+        queue.sync {
+            guard let timelineStartTime,
+                  let firstSampleTime else { return .zero }
+            let offset = CMTimeSubtract(firstSampleTime, timelineStartTime)
+            guard offset.isValid,
+                  offset.seconds.isFinite,
+                  CMTimeCompare(offset, .zero) > 0 else { return .zero }
+            return CMTimeConvertScale(offset, timescale: 600, method: .roundHalfAwayFromZero)
+        }
+    }
 
     func start(url: URL, settings: RecordingSettings, timelineStartTime: CMTime? = nil) async throws {
         try queue.sync {
@@ -29,6 +43,8 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
                     stereoBitrate: settings.finalAudioBitrate,
                     format: settings.effectiveSourceAudioFormat
                 )
+                self.timelineStartTime = timelineStartTime
+                firstSampleTime = nil
                 hasProducedStartupSample = false
 
                 session.beginConfiguration()
@@ -103,6 +119,12 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
         from connection: AVCaptureConnection
     ) {
         levelPublisher.publish(from: sampleBuffer)
+        if firstSampleTime == nil {
+            let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            if presentationTime.isValid {
+                firstSampleTime = presentationTime
+            }
+        }
         writer?.append(sampleBuffer)
         completeStartup(.success(()))
     }

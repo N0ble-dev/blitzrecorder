@@ -1,6 +1,7 @@
 import SwiftUI
 
 private let timelineContentSpace = "EditorTimelineContent"
+private let layoutSegmentFill = Color(red: 0.055, green: 0.235, blue: 0.255)
 
 @MainActor
 struct EditorTimelineView: View {
@@ -19,42 +20,82 @@ struct EditorTimelineView: View {
     let mutedAssetIDs: Set<String>
     let toggleableAssetIDs: Set<String>
     let onToggleTrack: (EditorAsset) -> Void
+    let onSplit: () -> Void
+    let onDeleteCut: () -> Void
+    let canDeleteCut: Bool
 
     @State private var zoomLevel: Double = 1
 
-    private let gutterWidth: CGFloat = 112
-    private let rulerHeight: CGFloat = 20
-    private let chaptersRowHeight: CGFloat = 30
-    private let segmentsRowHeight: CGFloat = 46
+    private let gutterWidth: CGFloat = 128
+    private let rulerHeight: CGFloat = 26
+    private let chaptersRowHeight: CGFloat = 32
+    private let segmentsRowHeight: CGFloat = 34
+    private let videoRowHeight: CGFloat = 48
+    private let audioRowHeight: CGFloat = 36
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
             header
 
-            GeometryReader { proxy in
-                timelineBody(viewportWidth: proxy.size.width)
+            Rectangle()
+                .fill(Color.white.opacity(0.07))
+                .frame(height: 1)
+
+            HStack(spacing: 0) {
+                GeometryReader { proxy in
+                    timelineBody(viewportWidth: proxy.size.width)
+                }
+                .frame(height: contentHeight)
             }
-            .frame(height: contentHeight)
+            .padding(12)
         }
-        .padding(12)
-        .background(BlitzUI.quietFill, in: .rect(cornerRadius: 10))
+        .background(Color.white.opacity(0.035), in: .rect(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.09), lineWidth: 1)
+                .allowsHitTesting(false)
+        }
     }
 
 
     private var header: some View {
-        HStack(spacing: 10) {
-            BlitzUI.sectionLabel("Timeline", icon: "timeline.selection")
+        HStack(spacing: 8) {
+            TimelineActionButton(
+                title: "Add layout",
+                systemName: "plus",
+                isDisabled: !isInteractive,
+                action: onSplit
+            )
+
+            TimelineActionButton(
+                title: "Remove",
+                systemName: "trash",
+                isDisabled: !canDeleteCut,
+                action: onDeleteCut
+            )
+
+            TimelineActionButton(
+                title: "Fit",
+                systemName: "arrow.left.and.right.square",
+                isDisabled: zoomLevel == 1
+            ) {
+                zoomLevel = 1
+            }
+
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(width: 1, height: 20)
+                .padding(.horizontal, 3)
 
             Text("\(formatTime(playbackTime)) / \(formatTime(duration))")
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .monospacedDigit()
-                .foregroundStyle(.white.opacity(0.58))
+                .foregroundStyle(.white.opacity(0.72))
+                .padding(.horizontal, 8)
+                .frame(height: 24)
+                .background(Color.black.opacity(0.28), in: .rect(cornerRadius: 6))
 
             Spacer(minLength: 0)
-
-            TimelineZoomButton(systemName: "arrow.left.and.right.square", help: "Fit timeline", isDisabled: zoomLevel == 1) {
-                zoomLevel = 1
-            }
 
             HStack(spacing: 6) {
                 Image(systemName: "minus.magnifyingglass")
@@ -69,6 +110,8 @@ struct EditorTimelineView: View {
                     .foregroundStyle(.white.opacity(0.45))
             }
         }
+        .padding(.horizontal, 14)
+        .frame(height: 48)
     }
 
 
@@ -80,8 +123,25 @@ struct EditorTimelineView: View {
         return HStack(alignment: .top, spacing: 8) {
             gutterColumn
 
-            ScrollView(.horizontal) {
+            ScrollView([.horizontal, .vertical]) {
                 ZStack(alignment: .topLeading) {
+                    Canvas { context, size in
+                        guard pxPerSecond > 0 else { return }
+                        let candidates: [Double] = [1, 2, 5, 10, 15, 30, 60, 120, 300]
+                        let interval = candidates.first { CGFloat($0) * pxPerSecond >= 64 } ?? 300
+                        var time = 0.0
+                        while time <= contentSeconds + 0.001 {
+                            let x = CGFloat(time) * pxPerSecond
+                            context.fill(
+                                Path(CGRect(x: x, y: rulerHeight, width: 1, height: max(0, size.height - rulerHeight))),
+                                with: .color(.white.opacity(0.045))
+                            )
+                            time += interval
+                        }
+                    }
+                    .frame(width: contentWidth, height: contentHeight)
+                    .allowsHitTesting(false)
+
                     VStack(alignment: .leading, spacing: 6) {
                         ruler(pxPerSecond: pxPerSecond, width: contentWidth)
 
@@ -119,7 +179,7 @@ struct EditorTimelineView: View {
             ForEach(Array(gutterRows.enumerated()), id: \.offset) { _, row in
                 HStack(spacing: 5) {
                     Image(systemName: row.icon)
-                        .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: 10, weight: .semibold))
                         .symbolRenderingMode(.hierarchical)
                         .foregroundStyle(.white.opacity(0.4))
                         .frame(width: 16)
@@ -138,6 +198,7 @@ struct EditorTimelineView: View {
                 }
                 .padding(.leading, 2)
                 .frame(width: gutterWidth, height: row.height)
+                .background(Color.white.opacity(0.025), in: .rect(cornerRadius: 5))
             }
         }
         .frame(width: gutterWidth)
@@ -156,7 +217,7 @@ struct EditorTimelineView: View {
                 .font(.system(size: 9, weight: .semibold))
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(.white.opacity(isOff ? 0.9 : 0.5))
-                .frame(width: 20, height: 18)
+                .frame(width: 28, height: 28)
                 .contentShape(.rect(cornerRadius: 5))
         }
         .buttonStyle(.plain)
@@ -190,9 +251,9 @@ struct EditorTimelineView: View {
                         with: .color(.white.opacity(0.28))
                     )
                     let label = Text(formatTime(t))
-                        .font(.system(size: 8.5, weight: .heavy, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.45))
-                    context.draw(label, at: CGPoint(x: x + 3.5, y: size.height - 11), anchor: .leading)
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.5))
+                    context.draw(label, at: CGPoint(x: x + 4, y: size.height - 14), anchor: .leading)
                 } else {
                     context.fill(
                         Path(CGRect(x: x, y: size.height - 3, width: 1, height: 3)),
@@ -232,13 +293,13 @@ struct EditorTimelineView: View {
         }
         .frame(width: contentWidth, height: chaptersRowHeight, alignment: .topLeading)
         .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.white.opacity(0.03))
+            Rectangle()
+                .fill(Color.white.opacity(0.025))
         )
     }
 
     private func chapterClip(_ chapter: RecordingProject.ChapterSnapshot, start: Double) -> some View {
-        RoundedRectangle(cornerRadius: 7, style: .continuous)
+        RoundedRectangle(cornerRadius: 5, style: .continuous)
             .fill(BlitzUI.trackCamera.opacity(0.22))
             .overlay(alignment: .leading) {
                 Text(chapter.title)
@@ -247,8 +308,8 @@ struct EditorTimelineView: View {
                     .lineLimit(1)
                     .padding(.horizontal, 7)
             }
-            .contentShape(.rect(cornerRadius: 7))
-            .modifier(TimelineClipHover(cornerRadius: 7))
+            .contentShape(.rect(cornerRadius: 5))
+            .modifier(TimelineClipHover(cornerRadius: 5))
             .onTapGesture {
                 onSeek(start)
                 onSeekEnded()
@@ -258,7 +319,6 @@ struct EditorTimelineView: View {
 
     private func segmentsTrack(pxPerSecond: CGFloat, contentWidth: CGFloat) -> some View {
         let events = sceneEvents
-        let frames = outputAsset.flatMap { library.filmstrips[$0.id] } ?? []
 
         return ZStack(alignment: .topLeading) {
             ForEach(events.indices, id: \.self) { index in
@@ -269,60 +329,52 @@ struct EditorTimelineView: View {
                 let gap: CGFloat = index + 1 < events.count ? 2 : 0
                 let width = max(14, CGFloat(end - start) * pxPerSecond - gap)
 
-                segmentClip(index: index, start: start, end: end, frames: frames)
+                segmentClip(index: index)
                     .frame(width: width, height: segmentsRowHeight)
                     .offset(x: CGFloat(start) * pxPerSecond)
             }
         }
         .frame(width: contentWidth, height: segmentsRowHeight, alignment: .topLeading)
         .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.white.opacity(0.03))
+            Rectangle()
+                .fill(Color.white.opacity(0.025))
         )
     }
 
-    private func segmentClip(index: Int, start: Double, end: Double, frames: [CGImage]) -> some View {
+    private func segmentClip(index: Int) -> some View {
         let isSelected = selection == .segment(index)
-        let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
 
-        return ZStack {
-            shape.fill(BlitzUI.trackScreen.opacity(0.20))
-            if !frames.isEmpty, duration > 0 {
-                filmstrip(frames: frameSlice(frames, start: start, end: end))
+        return shape
+            .fill(layoutSegmentFill)
+            .overlay {
+                if isSelected {
+                    shape.strokeBorder(BlitzUI.mint, lineWidth: 2)
+                }
             }
-            if isSelected {
-                shape.fill(Color.white.opacity(0.14))
+            .overlay(alignment: .leading) {
+                Text(mixTitle(for: index))
+                    .font(.system(size: 9, weight: .heavy))
+                    .foregroundStyle(isSelected ? BlitzUI.mint : .white)
+                    .lineLimit(1)
+                    .padding(.horizontal, 7)
             }
-        }
-        .overlay(alignment: .topLeading) {
-            clipLabel(mixTitle(for: index), isSelected: isSelected)
-        }
-        .clipShape(shape)
-        .contentShape(shape)
-        .modifier(TimelineClipHover(cornerRadius: 7))
-        .onTapGesture { selection = .segment(index) }
-    }
-
-    private func frameSlice(_ frames: [CGImage], start: Double, end: Double) -> [CGImage] {
-        guard duration > 0, !frames.isEmpty else { return [] }
-        let count = Double(frames.count)
-        let lo = min(frames.count - 1, max(0, Int(floor(start / duration * count))))
-        let hi = min(frames.count, max(lo + 1, Int(ceil(end / duration * count))))
-        return Array(frames[lo..<hi])
+            .contentShape(shape)
+            .modifier(TimelineClipHover(cornerRadius: 5))
+            .onTapGesture { selection = .segment(index) }
     }
 
     private func mixTitle(for index: Int) -> String {
-        guard sceneEvents.indices.contains(index) else { return "Scene" }
+        guard sceneEvents.indices.contains(index) else { return "Layout" }
         return EditorSceneTitle.title(for: sceneEvents[index].scene)
     }
 
-
     private func assetTrack(_ asset: EditorAsset, pxPerSecond: CGFloat, contentWidth: CGFloat) -> some View {
-        let rowHeight: CGFloat = asset.isVideo ? 40 : 32
+        let rowHeight: CGFloat = asset.isVideo ? videoRowHeight : audioRowHeight
         let clipSeconds = library.durations[asset.id] ?? duration
         let width = max(14, CGFloat(clipSeconds) * pxPerSecond)
         let isSelected = selection == .asset(asset.id)
-        let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
 
         return ZStack {
             shape.fill(asset.tint.opacity(0.18))
@@ -332,7 +384,7 @@ struct EditorTimelineView: View {
                 waveform(values: library.waveforms[asset.id] ?? [], tint: asset.tint)
             }
             if isSelected {
-                shape.fill(Color.white.opacity(0.14))
+                shape.strokeBorder(BlitzUI.mint, lineWidth: 2)
             }
         }
         .overlay(alignment: asset.isVideo ? .topLeading : .leading) {
@@ -340,14 +392,14 @@ struct EditorTimelineView: View {
         }
         .clipShape(shape)
         .contentShape(shape)
-        .modifier(TimelineClipHover(cornerRadius: 7))
+        .modifier(TimelineClipHover(cornerRadius: 5))
         .onTapGesture { selection = .asset(asset.id) }
         .opacity(hiddenAssetIDs.contains(asset.id) || mutedAssetIDs.contains(asset.id) ? 0.35 : 1)
         .frame(width: width, height: rowHeight)
         .frame(width: contentWidth, height: rowHeight, alignment: .topLeading)
         .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.white.opacity(0.03))
+            Rectangle()
+                .fill(Color.white.opacity(0.025))
         )
     }
 
@@ -392,7 +444,7 @@ struct EditorTimelineView: View {
             .lineLimit(1)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(Color.black.opacity(0.45), in: Capsule())
+            .background(Color.black.opacity(0.58), in: .rect(cornerRadius: 4))
             .padding(4)
     }
 
@@ -404,16 +456,21 @@ struct EditorTimelineView: View {
 
             ZStack(alignment: .top) {
                 Rectangle()
-                    .fill(Color.white.opacity(0.92))
-                    .frame(width: 1.5)
+                    .fill(BlitzUI.mint)
+                    .frame(width: 2)
                     .frame(maxHeight: .infinity)
+                    .shadow(color: Color.black.opacity(0.65), radius: 1, x: 1, y: 0)
 
                 PlayheadHandle()
                     .fill(BlitzUI.mint)
-                    .frame(width: 11, height: 14)
+                    .frame(width: 13, height: 16)
+                    .overlay {
+                        PlayheadHandle()
+                            .stroke(Color.black.opacity(0.7), lineWidth: 1)
+                    }
 
                 Color.clear
-                    .frame(width: 18)
+                    .frame(width: 28)
                     .frame(maxHeight: .infinity)
                     .contentShape(.rect)
                     .gesture(
@@ -423,9 +480,9 @@ struct EditorTimelineView: View {
                         isEnabled: isInteractive
                     )
             }
-            .frame(width: 18)
+            .frame(width: 28)
             .frame(maxHeight: .infinity, alignment: .top)
-            .offset(x: x - 9)
+            .offset(x: x - 14)
             .opacity(isInteractive ? 1 : 0.4)
         }
     }
@@ -478,13 +535,13 @@ struct EditorTimelineView: View {
             rows.append((icon: "text.quote", title: "Chapters", height: chaptersRowHeight, asset: nil))
         }
         if showsSegmentsTrack {
-            rows.append((icon: "film", title: "Scenes", height: segmentsRowHeight, asset: nil))
+            rows.append((icon: "rectangle.3.group", title: "Layouts", height: segmentsRowHeight, asset: nil))
         }
         for asset in trackAssets {
             rows.append((
                 icon: asset.systemImage,
                 title: asset.title,
-                height: asset.isVideo ? 40 : 32,
+                height: asset.isVideo ? videoRowHeight : audioRowHeight,
                 asset: asset
             ))
         }
@@ -501,7 +558,7 @@ struct EditorTimelineView: View {
                 height += 6 + segmentsRowHeight
             }
             for asset in trackAssets {
-                height += 6 + (asset.isVideo ? 40 : 32)
+                height += 6 + (asset.isVideo ? videoRowHeight : audioRowHeight)
             }
             if !showsSegmentsTrack && trackAssets.isEmpty {
                 height += 6 + 56
@@ -522,32 +579,31 @@ struct EditorTimelineView: View {
     }
 }
 
-private struct TimelineZoomButton: View {
+private struct TimelineActionButton: View {
+    let title: String
     let systemName: String
-    let help: String
     let isDisabled: Bool
     let action: () -> Void
 
     @State private var isHovering = false
 
     var body: some View {
-        let button = Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(isDisabled ? 0.22 : (isHovering ? 0.9 : 0.55)))
-                .frame(width: 22, height: 20)
-                .contentShape(.rect)
+        Button(action: action) {
+            Label(title, systemImage: systemName)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.white.opacity(isDisabled ? 0.24 : (isHovering ? 0.94 : 0.68)))
+                .padding(.horizontal, 9)
+                .frame(height: 28)
+                .background(
+                    Color.white.opacity(isHovering && !isDisabled ? 0.075 : 0.035),
+                    in: .rect(cornerRadius: 7)
+                )
+                .contentShape(.rect(cornerRadius: 7))
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
         .onHover { isHovering = $0 && !isDisabled }
-        .help(help)
-
-        if isDisabled {
-            button
-        } else {
-            button.pointingHandCursor()
-        }
+        .pointingHandCursor()
     }
 }
 
@@ -574,6 +630,12 @@ enum EditorSceneTitle {
                 ),
                 layerOrder: layerOrder.isEmpty ? [.screen, .camera] : layerOrder
             ),
+            screenCropAmount: snapshot.screenCropAmount.map {
+                CGPoint(x: CGFloat($0.x), y: CGFloat($0.y))
+            } ?? .zero,
+            screenCropPosition: snapshot.screenCropPosition.map {
+                CGPoint(x: CGFloat($0.x), y: CGFloat($0.y))
+            } ?? .zero,
             cameraContentMode: CameraContentMode(rawValue: snapshot.cameraContentMode) ?? .fill,
             sourceOpacities: sourceOpacities
         )

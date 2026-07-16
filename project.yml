@@ -11,6 +11,9 @@ packages:
     path: Packages/BlitzRecorderCore
   BlitzRecorderTransport:
     path: Packages/BlitzRecorderTransport
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio.git
+    exactVersion: 0.15.5
 
 settings:
   base:
@@ -41,6 +44,8 @@ targets:
         product: BlitzRecorderCore
       - package: BlitzRecorderTransport
         product: BlitzRecorderTransport
+      - package: FluidAudio
+        product: FluidAudio
     settings:
       base:
         PRODUCT_NAME: BlitzRecorder

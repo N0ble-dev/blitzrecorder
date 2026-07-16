@@ -100,6 +100,7 @@
 		989802934B0F85EF20AB5E3F /* BottomDock.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9DBC88798E5446C497CE07A /* BottomDock.swift */; };
 		9A1F14395DBE916B8634AA87 /* VideoFileWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63DFA05DC7FA197E3C1D38DC /* VideoFileWriter.swift */; };
 		9A617C2E2FFB9AAB623E4847 /* TranscriptDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B038A5548A91598E0660ABB9 /* TranscriptDetailView.swift */; };
+		A4781B8CF68E4796216C96F9 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 05DC77C9DDF169F9758FAB59 /* FluidAudio */; };
 		A4DA6A0A11D5C4C7FF65B0CD /* AccessController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A87F89F897D05BE172CACD4 /* AccessController.swift */; };
 		A9CD3C4B4B9207AEA5260A6D /* EditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7732B1135DD948B4D5E8B799 /* EditorView.swift */; };
 		B25FEAF819B3F29AFE1D34EE /* BlitzRecorderTransport in Frameworks */ = {isa = PBXBuildFile; productRef = 51851B90D299274EC1D45318 /* BlitzRecorderTransport */; };
@@ -322,6 +323,7 @@
 			files = (
 				328149EB328AC98A7B8592D3 /* BlitzRecorderCore in Frameworks */,
 				2B01850114D7E3CA725A8B3D /* BlitzRecorderTransport in Frameworks */,
+				A4781B8CF68E4796216C96F9 /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -568,6 +570,7 @@
 			packageProductDependencies = (
 				E0B3C6448C1F5B591EB2C959 /* BlitzRecorderCore */,
 				17CB5176FA15B4A672C41362 /* BlitzRecorderTransport */,
+				05DC77C9DDF169F9758FAB59 /* FluidAudio */,
 			);
 			productName = BlitzRecorder;
 			productReference = D64AD47EDABBF7FDA751BE48 /* BlitzRecorder.app */;
@@ -623,6 +626,7 @@
 			mainGroup = 71641E4A3981E72AC57F44DF;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				6F2E1AAE93041478E913C361 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				6F5DFCF21752E742E8BE95C9 /* XCLocalSwiftPackageReference "Packages/BlitzRecorderCore" */,
 				FB59833A2D61C6723DDC8D2C /* XCLocalSwiftPackageReference "Packages/BlitzRecorderTransport" */,
 			);
@@ -1065,7 +1069,23 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		6F2E1AAE93041478E913C361 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.15.5;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
+		05DC77C9DDF169F9758FAB59 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 6F2E1AAE93041478E913C361 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
+		};
 		17CB5176FA15B4A672C41362 /* BlitzRecorderTransport */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = BlitzRecorderTransport;

@@ -19,14 +19,6 @@ enum SettingsPane: Int, CaseIterable, Identifiable {
         }
     }
 
-    var symbolName: String {
-        switch self {
-        case .recording: return "slider.horizontal.3"
-        case .devices: return "iphone.gen3"
-        case .permissions: return "lock.shield"
-        case .account: return "person.crop.circle"
-        }
-    }
 }
 
 @MainActor
@@ -53,8 +45,8 @@ final class SettingsWindowController: NSWindowController {
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
         window.appearance = NSAppearance(named: .darkAqua)
-        window.styleMask.remove(.resizable)
         window.setContentSize(SettingsRootView.contentSize)
+        window.minSize = NSSize(width: 840, height: 600)
         window.center()
         super.init(window: window)
     }
@@ -69,99 +61,65 @@ final class SettingsWindowController: NSWindowController {
 }
 
 private struct SettingsRootView: View {
-    static let contentSize = NSSize(width: 1_040, height: 720)
+    static let contentSize = NSSize(width: 1_020, height: 720)
 
     @Bindable var navigation: SettingsNavigation
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-
-            Divider()
-                .overlay(Color.white.opacity(0.06))
-
+        NavigationSplitView {
+            List(selection: selectedPaneBinding) {
+                Section("Settings") {
+                    ForEach(SettingsPane.allCases) { pane in
+                        sidebarRow(pane)
+                            .tag(pane)
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 178, ideal: 196, max: 220)
+            .safeAreaInset(edge: .bottom) {
+                Text("Changes save automatically")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.bar)
+            }
+        } detail: {
             detail
         }
+        .navigationSplitViewStyle(.balanced)
         .frame(width: Self.contentSize.width, height: Self.contentSize.height)
     }
 
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("SETTINGS")
-                .font(.system(size: 10, weight: .heavy))
-                .tracking(0.8)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 10)
-                .padding(.bottom, 8)
-
-            ForEach(SettingsPane.allCases) { pane in
-                sidebarButton(pane)
-            }
-
-            Spacer(minLength: 24)
-
-            Text("Changes save automatically")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.tertiary)
-                .padding(.horizontal, 10)
-        }
-        .padding(12)
-        .padding(.top, 8)
-        .frame(width: 178)
-        .frame(maxHeight: .infinity, alignment: .topLeading)
-        .background(.thinMaterial)
-    }
-
-    private func sidebarButton(_ pane: SettingsPane) -> some View {
-        let isSelected = navigation.selectedPane == pane
+    private func sidebarRow(_ pane: SettingsPane) -> some View {
         let issueCount = pane == .permissions
             ? navigation.viewModel.recordingReadiness.blockers.count
             : 0
 
-        return Button {
-            navigation.selectedPane = pane
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: pane.symbolName)
-                    .font(.system(size: 13, weight: .semibold))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(isSelected ? BlitzUI.mint : .secondary)
-                    .frame(width: 18)
+        return HStack(spacing: 8) {
+            Text(pane.title)
+                .font(.system(size: 12, weight: .medium))
 
-                Text(pane.title)
-                    .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
-                    .foregroundStyle(.primary)
+            Spacer(minLength: 0)
 
-                Spacer(minLength: 0)
-
-                if issueCount > 0 {
-                    Text("\(issueCount)")
-                        .font(.system(size: 9, weight: .bold, design: .rounded))
-                        .foregroundStyle(.black.opacity(0.8))
-                        .frame(minWidth: 17, minHeight: 17)
-                        .background(BlitzUI.warning, in: .circle)
-                }
+            if issueCount > 0 {
+                Text("\(issueCount)")
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(.black.opacity(0.8))
+                    .frame(minWidth: 17, minHeight: 17)
+                    .background(BlitzUI.warning, in: .circle)
             }
-            .padding(.horizontal, 10)
-            .frame(height: 36)
-            .background(
-                isSelected ? Color.white.opacity(0.10) : .clear,
-                in: .rect(cornerRadius: 8)
-            )
-            .contentShape(.rect(cornerRadius: 8))
         }
-        .buttonStyle(.plain)
-        .pointingHandCursor()
+        .frame(minHeight: 28)
     }
 
     @ViewBuilder
     private var detail: some View {
         switch navigation.selectedPane {
         case .recording:
-            ScrollView {
-                RecordingSettingsPage(vm: navigation.viewModel)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-            }
+            RecordingSettingsPage(vm: navigation.viewModel)
         case .devices:
             RemoteCameraPage(vm: navigation.viewModel)
         case .permissions:
@@ -172,5 +130,16 @@ private struct SettingsRootView: View {
         case .account:
             BlitzReelsCreatorPage(access: navigation.viewModel.accessController)
         }
+    }
+
+    private var selectedPaneBinding: Binding<SettingsPane?> {
+        Binding(
+            get: { navigation.selectedPane },
+            set: { selectedPane in
+                if let selectedPane {
+                    navigation.selectedPane = selectedPane
+                }
+            }
+        )
     }
 }

@@ -52,6 +52,7 @@ private struct EditorPlaybackMediaSignature: Equatable {
 struct EditorPlaybackSceneTimelineUpdate {
     let project: RecordingProject
     let baseSettings: RecordingSettings
+    let preservesPreviewSceneOverride: Bool
 }
 
 @MainActor
@@ -65,6 +66,7 @@ final class EditorPlaybackController {
     private(set) var renderSize: CGSize = .zero
     private(set) var hiddenKinds: Set<SceneLayerKind> = []
     private(set) var mutedSources: Set<CaptureSource> = []
+    private(set) var previewSceneRevision = 0
 
     @ObservationIgnored private var playback: EditorPlaybackComposition?
     @ObservationIgnored private var videoPlayers: [SceneLayerKind: AVPlayer] = [:]
@@ -139,6 +141,7 @@ final class EditorPlaybackController {
             loadedMediaSignature = EditorPlaybackMediaSignature(project: project)
             renderSize = playback.renderSize
             previewSceneOverride = nil
+            previewSceneRevision &+= 1
             if isSameProject {
                 hiddenKinds.formIntersection(Set(playback.videoKinds))
                 mutedSources.formIntersection(Set(playback.audioInputs.map(\.source)))
@@ -197,7 +200,10 @@ final class EditorPlaybackController {
 
         self.playback = refreshedPlayback
         loadedMediaSignature = incomingSignature
-        previewSceneOverride = nil
+        if !update.preservesPreviewSceneOverride {
+            previewSceneOverride = nil
+        }
+        previewSceneRevision &+= 1
         renderSize = refreshedPlayback.renderSize
         applyPreviewDuration()
         return true
@@ -281,6 +287,14 @@ final class EditorPlaybackController {
             playAll()
             isPlaying = true
         }
+    }
+
+    func play(from seconds: Double) {
+        guard isReady, masterPlayer != nil else { return }
+        currentTime = clampedTime(seconds)
+        isScrubbing = false
+        playAll()
+        isPlaying = true
     }
 
     private func playAll() {
@@ -382,6 +396,7 @@ final class EditorPlaybackController {
     func setPreviewSceneOverride(_ scene: RecordingScene?, at seconds: Double) {
         guard playback != nil else { return }
         previewSceneOverride = scene.map { ($0, clampedTime(seconds)) }
+        previewSceneRevision &+= 1
     }
 
     func layerFrames(at seconds: Double) -> [(kind: SceneLayerKind, frame: CGRect)] {
@@ -427,6 +442,7 @@ final class EditorPlaybackController {
         loadedProjectPath = nil
         loadedMediaSignature = nil
         previewSceneOverride = nil
+        previewSceneRevision &+= 1
     }
 
     private func teardownPlayers() {

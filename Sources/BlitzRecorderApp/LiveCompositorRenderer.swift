@@ -44,9 +44,23 @@ final class LiveCompositorRenderer: @unchecked Sendable {
             switch placement.kind {
             case .screen:
                 guard let screenBuffer else { continue }
+                if scene.screenShadowEnabled,
+                   !geometry.isVisibleSourceFullCanvas(
+                       for: .screen,
+                       sourceAspectRatio: sourceAspectRatio(for: screenBuffer)
+                   ) {
+                    image = shadow(
+                        for: placement.targetRect,
+                        cornerRadius: placement.cornerRadius
+                    )
+                    .settingOpacity(opacity)
+                    .composited(over: image)
+                }
                 image = fill(
                     CIImage(cvPixelBuffer: screenBuffer),
                     into: placement.targetRect,
+                    sourceCrop: { placement.videoPlacement.sourceCropRectangle(sourceExtent: $0) },
+                    contentMode: placement.videoPlacement.contentMode,
                     cornerRadius: placement.cornerRadius
                 )
                 .settingOpacity(opacity)

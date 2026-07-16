@@ -120,7 +120,10 @@ final class LiveCompositedRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
             configuration = screenStreamConfiguration(
                 settings: settings,
                 screenSourceGeometry: screenSourceGeometry,
-                sourceRect: nil
+                sourceRect: ScreenCaptureGeometry.pickedSourceRect(request: .init(
+                    settings: settings,
+                    filter: pickedFilter
+                ))
             )
             try await screenStream.updateContentFilter(pickedFilter)
         } else {
@@ -311,7 +314,10 @@ final class LiveCompositedRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
             screenDisplay = nil
             filter = pickedFilter
             screenSourceGeometry = ScreenCaptureGeometry.screenSourceGeometry(for: settings, pickedFilter: pickedFilter)
-            sourceRect = nil
+            sourceRect = ScreenCaptureGeometry.pickedSourceRect(request: .init(
+                settings: settings,
+                filter: pickedFilter
+            ))
         } else {
             let content = try await SCShareableContent.current
             let source = try ScreenCaptureGeometry.screenSource(for: settings, content: content)

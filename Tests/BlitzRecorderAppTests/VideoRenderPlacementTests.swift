@@ -3,6 +3,46 @@ import CoreGraphics
 import XCTest
 
 final class VideoRenderPlacementTests: XCTestCase {
+    func testWindowCaptureFillsStableScreenCardWhenNativeAspectChanges() {
+        var settings = RecordingSettings()
+        settings.layout = .horizontal
+        settings.enabledSources = [.screen, .camera]
+        settings.canvasPadding = 0.075
+        settings.screenSourceBinding = ScreenSourceBinding(
+            kind: .window,
+            displayID: "4",
+            bundleIdentifier: "com.example.App",
+            applicationName: "Example",
+            processID: 42,
+            windowID: 7,
+            windowTitle: "Example"
+        )
+        settings.sceneLayout.screenFrame = CGRect(x: 0.35, y: 0.25, width: 0.64, height: 0.62)
+        settings.sceneLayout.cameraFrame = CGRect(x: 0.04, y: 0.1, width: 0.23, height: 0.78)
+        var scene = RecordingScene(settings: settings)
+        scene.screenSourceGeometry.sourceAspectRatio = 4.0 / 3.0
+        let canvas = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let expected = SceneLayoutProjection.padded(
+            SceneLayoutProjection.denormalized(
+                settings.sceneLayout.screenFrame,
+                in: canvas,
+                origin: .upperLeft
+            ),
+            in: canvas,
+            padding: settings.canvasPadding
+        )
+
+        let geometry = SceneRenderGeometry(canvas: canvas, scene: scene, origin: .upperLeft)
+
+        XCTAssertRect(geometry.targetRect(for: .screen), equals: expected)
+        XCTAssertEqual(geometry.videoPlacement(for: .screen).contentMode, .aspectFit)
+        XCTAssertNil(
+            geometry.videoPlacement(for: .screen).cropRectangle(
+                naturalSize: CGSize(width: 1440, height: 1080)
+            )
+        )
+    }
+
     func testSceneRenderPlacementPolicyAppliesEditorScreenZoom() {
         var scene = RecordingScene(
             enabledSources: [.screen],
@@ -40,7 +80,7 @@ final class VideoRenderPlacementTests: XCTestCase {
         ).activePlacements.first { $0.kind == .camera }
 
         XCTAssertRect(placement?.targetRect ?? .zero, equals: CGRect(x: 26, y: 86, width: 32, height: 64))
-        XCTAssertEqual(placement?.cornerRadius, 8)
+        XCTAssertEqual(placement?.cornerRadius, 0)
         XCTAssertEqual(placement?.videoPlacement.sourceCropAmount, CGPoint(x: 0.25, y: 0))
         XCTAssertEqual(placement?.videoPlacement.sourceCropPosition, CGPoint(x: 0.2, y: -0.1))
         XCTAssertEqual(placement?.videoPlacement.contentMode, .aspectFill)
@@ -84,7 +124,7 @@ final class VideoRenderPlacementTests: XCTestCase {
             geometry.targetRect(for: .screen),
             equals: CGRect(x: 108, y: 717, width: 864, height: 486)
         )
-        XCTAssertRect(crop ?? .zero, equals: CGRect(x: 0, y: 0, width: 1920, height: 1080))
+        XCTAssertNil(crop)
         XCTAssertTrue(target.contains(geometry.targetRect(for: .screen)))
     }
 
@@ -244,7 +284,7 @@ final class VideoRenderPlacementTests: XCTestCase {
         )
     }
 
-    func testSourceMaskPathUsesVisibleCameraFitFrame() {
+    func testCanvasPaddingDoesNotCreateSourceMask() {
         var settings = RecordingSettings()
         settings.enabledSources = [.camera]
         settings.cameraContentMode = .fit
@@ -256,10 +296,22 @@ final class VideoRenderPlacementTests: XCTestCase {
             origin: .upperLeft
         )
 
-        XCTAssertRect(
-            geometry.sourceMaskPath(sourceAspectRatios: [.camera: 16.0 / 9.0])?.boundingBoxOfPath ?? .zero,
-            equals: CGRect(x: 10, y: 77.5, width: 80, height: 45)
+        XCTAssertNil(geometry.sourceMaskPath(sourceAspectRatios: [.camera: 16.0 / 9.0]))
+    }
+
+    func testScreenCornerRadiusCreatesMaskIndependentlyFromPadding() {
+        var settings = RecordingSettings()
+        settings.enabledSources = [.screen]
+        settings.canvasPadding = 0
+        settings.screenCornerRadius = 0.08
+        let geometry = SceneRenderGeometry(
+            canvas: CGRect(x: 0, y: 0, width: 200, height: 100),
+            scene: RecordingScene(settings: settings),
+            origin: .upperLeft
         )
+
+        XCTAssertEqual(geometry.sourceCornerRadius(for: .screen), 8, accuracy: 0.0001)
+        XCTAssertNotNil(geometry.sourceMaskPath())
     }
 
     func testHiddenLayerFramesReflowRemainingSourceLikeExport() {

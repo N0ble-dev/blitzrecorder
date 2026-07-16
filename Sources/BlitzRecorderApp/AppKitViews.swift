@@ -145,6 +145,15 @@ final class PreviewStageView: NSView {
         }
     }
 
+    var screenFillsSceneFrame = false {
+        didSet {
+            if oldValue != screenFillsSceneFrame {
+                needsLayout = true
+                needsDisplay = true
+            }
+        }
+    }
+
     var screenCrop: CGRect? {
         didSet {
             if !isScreenCropEditingEnabled {
@@ -827,7 +836,7 @@ final class PreviewStageView: NSView {
         CATransaction.setDisableActions(true)
         if view === cameraPreview {
             let isFullscreen = isFullscreenCameraPreview
-            let paddedRadius = SceneLayoutProjection.sourceCornerRadius(for: view.bounds, canvasPadding: canvasPadding)
+            let paddedRadius = SceneLayoutProjection.sourceCornerRadius(for: view.bounds, normalizedRadius: 0)
             let radius = paddedRadius > 0 || (!isFullscreen && !isFullWidthCameraPreview)
                 ? (paddedRadius > 0 ? paddedRadius : sourceCornerRadius(for: view.bounds))
                 : 0
@@ -839,7 +848,7 @@ final class PreviewStageView: NSView {
             view.layer?.shadowPath = nil
             applyCameraShadow(frame: view.frame, cornerRadius: radius)
         } else {
-            let radius = SceneLayoutProjection.sourceCornerRadius(for: view.bounds, canvasPadding: canvasPadding)
+            let radius = SceneLayoutProjection.sourceCornerRadius(for: view.bounds, normalizedRadius: 0)
             view.layer?.cornerRadius = radius
             view.layer?.cornerCurve = .continuous
             view.layer?.borderWidth = radius > 0 ? 1 : 0
@@ -875,7 +884,7 @@ final class PreviewStageView: NSView {
     }
 
     private func sourceMaskCornerRadius(for view: NSView, visibleRect: CGRect) -> CGFloat {
-        let paddedRadius = SceneLayoutProjection.sourceCornerRadius(for: visibleRect, canvasPadding: canvasPadding)
+        let paddedRadius = SceneLayoutProjection.sourceCornerRadius(for: visibleRect, normalizedRadius: 0)
         guard paddedRadius <= 0,
               view === cameraPreview,
               !isFullscreenCameraPreview,
@@ -957,6 +966,7 @@ final class PreviewStageView: NSView {
                 enabledSources: enabledSources,
                 sceneLayout: sceneLayout,
                 screenSourceGeometry: ScreenSourceGeometry(
+                    fillsSceneFrame: screenFillsSceneFrame,
                     normalizedCrop: screenCrop,
                     sourceAspectRatio: screenSourceAspectRatio
                 ),
@@ -2036,6 +2046,7 @@ final class ScreenPreviewView: NSView {
 @MainActor
 final class CameraPreviewView: NSView {
     private let label = NSTextField(labelWithString: "CAMERA")
+    private let placeholderLayer = CALayer()
     private let imageLayer = CALayer()
     private var previewLayer: AVCaptureVideoPreviewLayer?
     private var sampleBufferLayer: AVSampleBufferDisplayLayer?
@@ -2053,6 +2064,8 @@ final class CameraPreviewView: NSView {
     }
     var hasPreviewContent: Bool { previewLayer != nil || sampleBufferLayer != nil || imageLayer.contents != nil }
     var currentSourceAspectRatio: CGFloat { sourceAspectRatio }
+    var messageFrameForTesting: CGRect { label.frame }
+    var messageBackgroundFrameForTesting: CGRect { placeholderLayer.frame }
 
     init() {
         super.init(frame: .zero)
@@ -2060,6 +2073,10 @@ final class CameraPreviewView: NSView {
         layer?.backgroundColor = .clear
         layer?.masksToBounds = true
         layer?.actions = noResizeActions
+
+        placeholderLayer.backgroundColor = NSColor.black.withAlphaComponent(0.34).cgColor
+        placeholderLayer.actions = noResizeActions
+        layer?.addSublayer(placeholderLayer)
 
         imageLayer.contentsGravity = .resizeAspectFill
         imageLayer.backgroundColor = .clear
@@ -2070,17 +2087,18 @@ final class CameraPreviewView: NSView {
         label.textColor = NSColor.white.withAlphaComponent(0.9)
         label.alignment = .center
         label.lineBreakMode = .byWordWrapping
-        label.maximumNumberOfLines = 2
+        label.maximumNumberOfLines = 3
         label.translatesAutoresizingMaskIntoConstraints = false
         label.wantsLayer = true
-        label.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.62).cgColor
-        label.layer?.cornerRadius = 6
+        label.layer?.backgroundColor = NSColor.clear.cgColor
+        label.layer?.cornerRadius = 0
         label.layer?.masksToBounds = true
         addSubview(label)
 
         NSLayoutConstraint.activate([
             label.centerXAnchor.constraint(equalTo: centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor)
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, multiplier: 0.9)
         ])
     }
 
@@ -2113,6 +2131,7 @@ final class CameraPreviewView: NSView {
         ).sourceFrame(sourceAspectRatio: sourceAspectRatio)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        placeholderLayer.frame = bounds
         previewLayer?.frame = contentFrame
         sampleBufferLayer?.frame = contentFrame
         imageLayer.frame = contentFrame
@@ -2130,6 +2149,7 @@ final class CameraPreviewView: NSView {
         layer.actions = noResizeActions
         syncPreviewLayerFrame()
         self.layer?.insertSublayer(layer, at: 0)
+        placeholderLayer.isHidden = true
         label.isHidden = true
     }
 
@@ -2141,6 +2161,7 @@ final class CameraPreviewView: NSView {
         imageLayer.contents = image
         sourceAspectRatio = overrideAspectRatio ?? CGFloat(image.width) / max(1, CGFloat(image.height))
         syncPreviewLayerFrame()
+        placeholderLayer.isHidden = true
         label.isHidden = true
     }
 
@@ -2163,6 +2184,7 @@ final class CameraPreviewView: NSView {
         }
         sourceAspectRatio = overrideAspectRatio ?? CGFloat(width) / max(1, CGFloat(height))
         syncPreviewLayerFrame()
+        placeholderLayer.isHidden = true
         guard let sampleBufferLayer else { return }
         if #available(macOS 15.0, *) {
             let renderer = sampleBufferLayer.sampleBufferRenderer
@@ -2194,6 +2216,7 @@ final class CameraPreviewView: NSView {
         sampleBufferLayer?.removeFromSuperlayer()
         sampleBufferLayer = nil
         imageLayer.contents = nil
+        placeholderLayer.isHidden = false
         label.isHidden = false
         label.stringValue = message
     }

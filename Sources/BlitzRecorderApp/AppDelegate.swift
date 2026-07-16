@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuActionsTarget {
     private lazy var coordinator = RecorderCoordinator(accessController: accessController)
     private var windowController: MainWindowController?
     private var statusItem: NSStatusItem?
+    private var recordingStatusMenuItem: NSMenuItem?
     private var blinkTimer: Timer?
     private var statusElapsedTimer: Timer?
     private var statusElapsedStartedAt: Date?
@@ -133,51 +134,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuActionsTarget {
     private func rebuildMenu() {
         let menu = NSMenu()
 
-        menu.addItem(NSMenuItem(title: "Show BlitzRecorder", action: #selector(showWindow), keyEquivalent: ""))
+        let recordingStatusItem = NSMenuItem(
+            title: recordingStatusTitle(),
+            action: nil,
+            keyEquivalent: ""
+        )
+        recordingStatusItem.isEnabled = false
+        recordingStatusMenuItem = recordingStatusItem
+        menu.addItem(recordingStatusItem)
         menu.addItem(.separator())
 
-        switch coordinator.state {
-        case .idle:
-            let readiness = coordinator.recordingReadiness()
-            let startItem = NSMenuItem(title: "Start Recording", action: #selector(startRecording), keyEquivalent: "r")
-            startItem.isEnabled = readiness.isReady
-            menu.addItem(startItem)
+        let heading = NSMenuItem(title: "Recent Projects", action: nil, keyEquivalent: "")
+        heading.isEnabled = false
+        menu.addItem(heading)
 
-            if !readiness.isReady {
-                menu.addItem(Self.wrappingCaptionItem(readiness.detail))
+        let projects = TakeFileStore()
+            .loadProjectHistory(settings: coordinator.settings)
+            .entries
+            .prefix(5)
+
+        if projects.isEmpty {
+            let emptyItem = NSMenuItem(title: "No recent projects", action: nil, keyEquivalent: "")
+            emptyItem.isEnabled = false
+            menu.addItem(emptyItem)
+        } else {
+            for project in projects {
+                let item = NSMenuItem(
+                    title: Self.shortMenuTitle(project.title),
+                    action: #selector(openRecentProject),
+                    keyEquivalent: ""
+                )
+                item.representedObject = project
+                item.isEnabled = coordinator.state == .idle
+                menu.addItem(item)
             }
-        case .starting:
-            let item = NSMenuItem(title: "Starting...", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
-        case .recording:
-            menu.addItem(NSMenuItem(title: "Pause", action: #selector(pauseRecording), keyEquivalent: "p"))
-            menu.addItem(NSMenuItem(title: "Stop", action: #selector(stopRecording), keyEquivalent: "s"))
-            addSceneItems(to: menu)
-        case .paused:
-            menu.addItem(NSMenuItem(title: "Resume", action: #selector(resumeRecording), keyEquivalent: "p"))
-            menu.addItem(NSMenuItem(title: "Stop", action: #selector(stopRecording), keyEquivalent: "s"))
-            addSceneItems(to: menu)
-        case .finishing:
-            let item = NSMenuItem(title: "Finishing...", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
         }
-
-        menu.addItem(.separator())
-        let fitWindowItem = NSMenuItem(title: "Fit Front Window for Shorts", action: #selector(fitFrontWindowForShorts), keyEquivalent: "")
-        menu.addItem(fitWindowItem)
-        menu.addItem(NSMenuItem(title: "Target Window Wider", action: #selector(makeTargetWindowWider), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Target Window Narrower", action: #selector(makeTargetWindowNarrower), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Target Window Taller", action: #selector(makeTargetWindowTaller), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Target Window Shorter", action: #selector(makeTargetWindowShorter), keyEquivalent: ""))
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: coordinator.settings.showsRuleOfThirdsOverlay ? "Hide Rule of Thirds" : "Show Rule of Thirds", action: #selector(toggleOverlay), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Zoom In", action: #selector(zoomIn), keyEquivalent: "+"))
-        menu.addItem(NSMenuItem(title: "Zoom Out", action: #selector(zoomOut), keyEquivalent: "-"))
-        menu.addItem(NSMenuItem(title: "Reset Zoom", action: #selector(resetZoom), keyEquivalent: "0"))
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
 
         for item in menu.items {
             item.target = self
@@ -185,54 +176,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuActionsTarget {
         statusItem?.menu = menu
     }
 
-    private static func wrappingCaptionItem(_ text: String, width: CGFloat = 300) -> NSMenuItem {
-        let item = NSMenuItem()
-        item.isEnabled = false
-
-        let label = NSTextField(wrappingLabelWithString: text)
-        label.font = .systemFont(ofSize: 11.5)
-        label.textColor = .secondaryLabelColor
-        label.isSelectable = false
-        label.lineBreakMode = .byWordWrapping
-        label.maximumNumberOfLines = 0
-        label.preferredMaxLayoutWidth = width
-        label.translatesAutoresizingMaskIntoConstraints = false
-
-        let container = NSView()
-        container.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(label)
-        NSLayoutConstraint.activate([
-            container.widthAnchor.constraint(equalToConstant: width + 33),
-            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 21),
-            label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
-            label.topAnchor.constraint(equalTo: container.topAnchor, constant: 4),
-            label.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -7),
-        ])
-        item.view = container
-        return item
+    private func recordingStatusTitle() -> String {
+        switch coordinator.state {
+        case .idle:
+            return "Not Recording"
+        case .starting:
+            return "Starting Recording..."
+        case .recording:
+            return "Recording \(formattedStatusElapsed())"
+        case .paused:
+            return "Paused \(formattedStatusElapsed())"
+        case .finishing:
+            return "Finishing Recording..."
+        }
     }
 
-    private func addSceneItems(to menu: NSMenu) {
-        let scenes = coordinator.scenesForCurrentLayout()
-        guard !scenes.isEmpty else { return }
+    private func formattedStatusElapsed() -> String {
+        let activeSeconds = statusElapsedStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        let totalSeconds = Int((statusElapsedAccumulated + activeSeconds).rounded(.down))
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        return String(format: "%02d:%02d", minutes, seconds)
+    }
 
-        menu.addItem(.separator())
-        let heading = NSMenuItem(title: "Switch Scene", action: nil, keyEquivalent: "")
-        heading.isEnabled = false
-        menu.addItem(heading)
-
-        let selectedID = coordinator.selectedSceneIDForCurrentLayout()
-        for scene in scenes {
-            let item = NSMenuItem(title: scene.name, action: #selector(chooseSceneItem), keyEquivalent: "")
-            item.representedObject = scene.id
-            item.state = scene.id == selectedID ? .on : .off
-            menu.addItem(item)
-        }
-
-        if coordinator.settings.visibleSources.contains(.screen) {
-            menu.addItem(.separator())
-            menu.addItem(NSMenuItem(title: "Switch Window/App...", action: #selector(pickScreen), keyEquivalent: ""))
-        }
+    private static func shortMenuTitle(_ title: String) -> String {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayTitle = trimmedTitle.isEmpty ? "Untitled Recording" : trimmedTitle
+        guard displayTitle.count > 30 else { return displayTitle }
+        return String(displayTitle.prefix(27)) + "..."
     }
 
     private func updateStatusItem(for state: RecordingState) {
@@ -300,11 +271,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuActionsTarget {
     }
 
     private func updateStatusElapsedTitle() {
-        let activeSeconds = statusElapsedStartedAt.map { Date().timeIntervalSince($0) } ?? 0
-        let totalSeconds = Int((statusElapsedAccumulated + activeSeconds).rounded(.down))
-        let minutes = totalSeconds / 60
-        let seconds = totalSeconds % 60
-        statusItem?.button?.title = " \(String(format: "%02d:%02d", minutes, seconds))"
+        statusItem?.button?.title = " \(formattedStatusElapsed())"
+        recordingStatusMenuItem?.title = recordingStatusTitle()
     }
 
     private func statusImage(color: NSColor) -> NSImage {
@@ -380,6 +348,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuActionsTarget {
     }
 
     @objc private func showWindow() {
+        presentMainWindow()
+    }
+
+    @objc private func openRecentProject(_ sender: NSMenuItem) {
+        guard coordinator.state == .idle,
+              let project = sender.representedObject as? RecordingProjectHistory.Entry else {
+            return
+        }
+        windowController?.openProject(project)
         presentMainWindow()
     }
 

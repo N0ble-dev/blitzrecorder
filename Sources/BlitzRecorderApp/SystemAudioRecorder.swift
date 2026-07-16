@@ -37,12 +37,23 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
         self.timelineStartTime = timelineStartTime
         firstSampleTime = nil
         hasProducedStartupSample = false
-        writer = try AudioSampleFileWriter(
+        let writer = try AudioSampleFileWriter(
             url: url,
             timelineStartTime: timelineStartTime,
             stereoBitrate: settings.finalAudioBitrate,
             format: settings.effectiveSourceAudioFormat
         )
+        writer.onFirstSampleWritten = { [weak self] in
+            self?.queue.async {
+                self?.completeStartup(.success(()))
+            }
+        }
+        writer.onFailure = { [weak self] error in
+            self?.queue.async {
+                self?.completeStartup(.failure(error))
+            }
+        }
+        self.writer = writer
 
         let filter = try await SystemAudioStreamConfiguration.contentFilter(settings: settings)
         let configuration = SystemAudioStreamConfiguration.configuration(streamName: "BlitzRecorder System Audio")
@@ -95,7 +106,6 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
         }
         levelPublisher.publish(from: sampleBuffer)
         writer?.append(sampleBuffer)
-        completeStartup(.success(()))
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {

@@ -64,9 +64,11 @@ final class RecorderCoordinator {
     private var currentPickedScreenSourceAspectRatio: CGFloat?
     private var isEditingScreenCrop = false
     private(set) var screenContentSelectionRevision = 0
+    private(set) var screenWindowGeometryRevision = 0
     private var screenWindowFitRevision = 0
     private var activeScreenCaptureConfigurationRevision = 0
     private var activeScreenCaptureConfigurationTask: Task<Void, Never>?
+    private var localCameraRuntimeState: LocalCameraRuntimeState = .unchecked
 
     private struct ScreenSourceActionContext: Equatable {
         let screenWindowFitRevision: Int
@@ -128,6 +130,11 @@ final class RecorderCoordinator {
             persistSettings()
         }
         reconcilePersistentScreenAccessIfNeeded()
+        audioRecorder.failureHandler = { [weak self] error in
+            Task { @MainActor [weak self] in
+                self?.handleActiveMicrophoneCaptureFailure(error)
+            }
+        }
         remoteCamera.onMessage = { [weak self] message in
             self?.onMessage?(message)
         }
@@ -986,7 +993,7 @@ final class RecorderCoordinator {
         Task { [weak self] in
             guard let self else { return }
             guard let processID = await self.targetProcessIDForScreenContentZoom() else {
-                self.onMessage?("Select an app or window before changing app zoom.")
+                self.onMessage?("Select an app or window before changing app content size.")
                 return
             }
             guard self.screenSourceActionContext() == context else { return }
@@ -1356,6 +1363,14 @@ final class RecorderCoordinator {
         guard sceneChangeIsAllowed() else { return }
         settings.screenWindowZoom = WindowZoomGeometry.clampedZoom(zoom)
         persistSettings()
+    }
+
+    func setScreenSourceZoom(_ zoom: CGFloat) {
+        guard sceneChangeIsAllowed() else { return }
+        settings.screenWindowZoom = ScreenSourceZoomGeometry.clamped(zoom)
+        persistSettings()
+        updateRecordingSceneIfNeeded()
+        onScreenCaptureConfigurationChanged?()
     }
 
     func currentCameraSourceAspectRatio() -> CGFloat {
@@ -1853,18 +1868,26 @@ final class RecorderCoordinator {
 
     func recordingReadiness() -> RecordingReadiness {
         let readiness = permissionGate.readiness(for: settings)
-        guard let remoteBlocker = remoteCameraConnectionBlocker() else {
-            return readiness
+        if let remoteBlocker = remoteCameraConnectionBlocker() {
+            let blockers = readiness.blockers + [remoteBlocker]
+            return RecordingReadiness(
+                isReady: false,
+                title: readiness.title,
+                detail: "Start disabled: \(readiness.statusLine) | Camera: \(remoteBlocker.status)",
+                blockers: blockers,
+                statusLine: "\(readiness.statusLine) | Camera: \(remoteBlocker.status)"
+            )
         }
 
-        let blockers = readiness.blockers + [remoteBlocker]
-        return RecordingReadiness(
-            isReady: false,
-            title: readiness.title,
-            detail: "Start disabled: \(readiness.statusLine) | Camera: \(remoteBlocker.status)",
-            blockers: blockers,
-            statusLine: "\(readiness.statusLine) | Camera: \(remoteBlocker.status)"
-        )
+        return localCameraRuntimeState.applying(.init(
+            readiness: readiness,
+            settings: settings,
+            isRemoteCameraSelected: isRemoteCameraSelected
+        ))
+    }
+
+    func setLocalCameraRuntimeState(_ state: LocalCameraRuntimeState) {
+        localCameraRuntimeState = state
     }
 
     func pickScreenContent() async throws {
@@ -1977,7 +2000,7 @@ final class RecorderCoordinator {
         updateRecordingSceneIfNeeded()
         if shouldUpdateCapture {
             onScreenCaptureConfigurationChanged?()
-            onMessage?(zoom > 1 ? "Zoomed picked screen source." : "Reset picked screen source zoom.")
+            onMessage?(zoom > 1 ? "Cropped the picked screen source." : "Reset the picked source crop.")
         }
     }
 
@@ -1985,6 +2008,7 @@ final class RecorderCoordinator {
         _ arrangement: ShortsWindowArrangement,
         shouldUpdateCapture: Bool
     ) {
+        screenWindowGeometryRevision += 1
         if arrangement.frame.width > 0, arrangement.frame.height > 0 {
             noteScreenSourceAspectRatio(arrangement.frame.width / arrangement.frame.height)
         }
@@ -2339,16 +2363,7 @@ final class RecorderCoordinator {
                     onRenderProgress?(1)
                     try? await Task.sleep(for: .milliseconds(250))
                     if completion.wroteMedia, let finalURL = completion.url {
-                        let savedURL: URL
-                        if let takeToFinalize {
-                            savedURL = await renameLiveCompositedOutputIfPossible(
-                                outputURL: finalURL,
-                                take: takeToFinalize,
-                                settings: takeSettings
-                            )
-                        } else {
-                            savedURL = finalURL
-                        }
+                        let savedURL = finalURL
                         accessController.recordSuccessfulExportIfNeeded()
                         if let takeToFinalize {
                             takeFileStore.cleanupIntermediateFiles(for: takeToFinalize, settings: takeSettings)
@@ -2449,6 +2464,16 @@ final class RecorderCoordinator {
         }
     }
 
+    private func handleActiveMicrophoneCaptureFailure(_ error: Error) {
+        guard state == .recording || state == .paused else { return }
+        stop()
+        onRequestForeground?()
+        onMessage?(
+            "Microphone capture failed. Recording stopped to protect the take: "
+                + error.recorderFailureDescription
+        )
+    }
+
     func refreshAudioLevelMonitoring() {
         guard state == .idle else { return }
         Task {
@@ -2507,13 +2532,7 @@ final class RecorderCoordinator {
         }
     }
 
-    func exportProject(
-        at projectURL: URL,
-        outputFormat: OutputVideoFormat,
-        outputResolution: OutputResolution? = nil,
-        hiddenVideoSources: Set<SceneLayerKind> = [],
-        mutedAudioSources: Set<CaptureSource> = []
-    ) {
+    func exportProject(_ request: ProjectExportRequest) {
         guard accessController.canRenderExport else {
             onMessage?("Export is unavailable.")
             return
@@ -2524,15 +2543,21 @@ final class RecorderCoordinator {
         }
 
         onRenderProgress?(0)
-        onMessage?("Exporting \(outputFormat.displayName)...")
+        onMessage?("Exporting \(request.outputFormat.displayName)...")
 
         Task {
+            let destinationAccessStarted = request.destinationURL.startAccessingSecurityScopedResource()
+            defer {
+                if destinationAccessStarted {
+                    request.destinationURL.stopAccessingSecurityScopedResource()
+                }
+            }
             do {
-                let project = try takeFileStore.loadRecordingProject(at: projectURL)
+                let project = try takeFileStore.loadRecordingProject(at: request.projectURL)
                 let exportSettings = takeFileStore.recordingSettings(
                     from: project,
                     baseSettings: settings,
-                    outputFormat: outputFormat
+                    outputFormat: request.outputFormat
                 )
                 let outputAccess = try takeFileStore.prepareOutputDirectory(settings: exportSettings)
                 defer { outputAccess.stop() }
@@ -2540,21 +2565,22 @@ final class RecorderCoordinator {
                 let take = takeFileStore.recordingTake(
                     from: project,
                     settings: exportSettings,
-                    outputFormat: outputFormat
+                    outputFormat: request.outputFormat
                 )
                 let sceneEvents = takeFileStore.sceneEvents(from: project)
 
                 var renderSettings = exportSettings
-                if let outputResolution {
-                    renderSettings.outputResolution = outputResolution
-                }
-                if mutedAudioSources.contains(.microphone) {
+                renderSettings.outputResolution = request.outputResolution
+                renderSettings.customVideoBitrate = request.videoQuality.videoBitrate(
+                    baseBitrate: renderSettings.autoVideoBitrate
+                )
+                if request.mutedAudioSources.contains(.microphone) {
                     renderSettings.microphoneGain = 0
                 }
-                if mutedAudioSources.contains(.systemAudio) {
+                if request.mutedAudioSources.contains(.systemAudio) {
                     renderSettings.systemAudioGain = 0
                 }
-                let hiddenCaptureSources = Set(hiddenVideoSources.map(\.source))
+                let hiddenCaptureSources = Set(request.hiddenVideoSources.map(\.source))
                 var renderSceneEvents = sceneEvents
                 if !hiddenCaptureSources.isEmpty {
                     renderSettings.enabledSources.subtract(hiddenCaptureSources)
@@ -2569,7 +2595,7 @@ final class RecorderCoordinator {
                     }
                 }
 
-                let url = try await Merger.exportFinalVideo(
+                let renderedURL = try await Merger.exportFinalVideo(
                     take: take,
                     settings: renderSettings,
                     sceneEvents: renderSceneEvents,
@@ -2577,15 +2603,19 @@ final class RecorderCoordinator {
                         self?.onRenderProgress?(progress)
                     }
                 )
+                let url = try ProjectExportPlacement.place(ProjectExportPlacementRequest(
+                    renderedURL: renderedURL,
+                    destinationURL: request.destinationURL
+                ))
 
                 try takeFileStore.writeSourceTakeManifest(
                     for: take,
-                    settings: exportSettings,
+                    settings: renderSettings,
                     finalVideoURL: url
                 )
                 try takeFileStore.writeRecordingProject(
                     for: take,
-                    settings: exportSettings,
+                    settings: renderSettings,
                     sceneEvents: sceneEvents,
                     finalVideoURL: url,
                     chapters: project.chapters,
@@ -2816,6 +2846,8 @@ final class RecorderCoordinator {
         settings.canvasBackgroundAnimated = snapshot.canvasBackgroundAnimated
             && snapshot.canvasBackgroundStyle.supportsBackgroundAnimation
         settings.canvasPadding = snapshot.canvasPadding
+        settings.screenCornerRadius = snapshot.screenCornerRadius
+        settings.screenShadowEnabled = snapshot.screenShadowEnabled
         settings.cameraContentMode = snapshot.cameraContentMode
         settings.cameraFramePadding = 0
         settings.cameraShadowEnabled = snapshot.cameraShadowEnabled

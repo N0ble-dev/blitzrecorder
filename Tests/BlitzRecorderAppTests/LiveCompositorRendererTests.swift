@@ -4,6 +4,66 @@ import CoreVideo
 import XCTest
 
 final class LiveCompositorRendererTests: XCTestCase {
+    func testScreenShadowIsIndependentFromCanvasPadding() throws {
+        var settings = RecordingSettings()
+        settings.enabledSources = [.screen]
+        settings.outputResolution = .p720
+        settings.layout = .vertical
+        settings.canvasBackgroundStyle = .studioPaperWhite
+        settings.canvasPadding = 0.1
+        settings.screenShadowEnabled = true
+
+        let scene = RecordingScene(settings: settings)
+        var sceneWithoutShadow = scene
+        sceneWithoutShadow.screenShadowEnabled = false
+        let dimensions = ScreenCaptureGeometry.outputDimensions(for: settings)
+        let screenBuffer = try makePixelBuffer(
+            width: 160,
+            height: 90,
+            color: (blue: 0, green: 0, red: 0, alpha: 255)
+        )
+        let outputWithShadow = try makePixelBuffer(
+            width: dimensions.width,
+            height: dimensions.height,
+            color: (blue: 0, green: 0, red: 0, alpha: 0)
+        )
+        let outputWithoutShadow = try makePixelBuffer(
+            width: dimensions.width,
+            height: dimensions.height,
+            color: (blue: 0, green: 0, red: 0, alpha: 0)
+        )
+
+        let renderer = LiveCompositorRenderer()
+        XCTAssertTrue(renderer.render(
+            screenBuffer: screenBuffer,
+            cameraBuffer: nil,
+            scene: scene,
+            settings: settings,
+            to: outputWithShadow
+        ))
+        XCTAssertTrue(renderer.render(
+            screenBuffer: screenBuffer,
+            cameraBuffer: nil,
+            scene: sceneWithoutShadow,
+            settings: settings,
+            to: outputWithoutShadow
+        ))
+
+        let screenRect = SceneRenderGeometry(
+            canvas: CGRect(x: 0, y: 0, width: dimensions.width, height: dimensions.height),
+            scene: scene,
+            origin: .lowerLeft
+        ).targetRect(for: .screen)
+        let x = Int((screenRect.maxX + 8).rounded(.down))
+        let y = Int((CGFloat(dimensions.height) - screenRect.midY).rounded(.down))
+        let withShadow = sample(outputWithShadow, x: x, y: y)
+        let withoutShadow = sample(outputWithoutShadow, x: x, y: y)
+
+        XCTAssertLessThan(withShadow.red, withoutShadow.red)
+        XCTAssertLessThan(withShadow.green, withoutShadow.green)
+        XCTAssertLessThan(withShadow.blue, withoutShadow.blue)
+    }
+
     func testCameraShadowDoesNotDarkenFadedCameraContent() throws {
         var settings = RecordingSettings()
         settings.enabledSources = [.screen, .camera]

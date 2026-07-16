@@ -22,7 +22,9 @@ if [[ "$CONFIG" == "release" && "${APP_INTEGRITY_CHECKS:-1}" == "1" && -n "$SIGN
   SWIFT_BUILD_ARGS+=(-Xswiftc -D -Xswiftc RELEASE_APP_INTEGRITY_CHECKS)
 fi
 
-APP="$ROOT/build/${APP_BUNDLE_NAME}.app"
+APP_OUTPUT_DIRECTORY="${APP_OUTPUT_DIRECTORY:-$ROOT/build}"
+mkdir -p "$APP_OUTPUT_DIRECTORY"
+APP="$APP_OUTPUT_DIRECTORY/${APP_BUNDLE_NAME}.app"
 APP_BINARY="$APP/Contents/MacOS/BlitzRecorder"
 
 APP_ARCHS="${APP_ARCHS:-}"
@@ -164,7 +166,17 @@ else
 fi
 
 if [[ -n "$SIGN_IDENTITY" ]]; then
-  codesign --force --deep --options runtime --entitlements "$ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$APP" >/dev/null
+  CODESIGN_ARGS=(
+    --force
+    --deep
+    --options runtime
+    --entitlements "$ENTITLEMENTS"
+    --sign "$SIGN_IDENTITY"
+  )
+  if [[ "$SIGN_IDENTITY" == "Developer ID Application:"* ]]; then
+    CODESIGN_ARGS+=(--timestamp)
+  fi
+  codesign "${CODESIGN_ARGS[@]}" "$APP" >/dev/null
 else
   if [[ "$CONFIG" == "release" && "${ALLOW_AD_HOC_RELEASE_SIGNING:-0}" != "1" ]]; then
     echo "Release packaging requires a valid Apple code-signing identity. Set ALLOW_AD_HOC_RELEASE_SIGNING=1 only for local throwaway builds." >&2

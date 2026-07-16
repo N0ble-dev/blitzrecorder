@@ -5,22 +5,18 @@ import Foundation
 final class AudioSampleFileWriter: @unchecked Sendable {
     private let url: URL
     private let queue = DispatchQueue(label: "blitzrecorder.audio-writer")
-    private let timelineStartTime: CMTime?
     private let stereoBitrate: Int
     private let format: SourceAudioFormat
 
     private var writer: AVAssetWriter?
     private var input: AVAssetWriterInput?
-    private var firstPresentationTime: CMTime?
-    private var lastPresentationTime: CMTime?
-    private var pauseStartedAt: CMTime?
-    private var pauseOffset = CMTime.zero
     private var paused = false
     private var finished = false
     private var wroteSample = false
     private var writeError: Error?
-    private static let maximumTrustedTimelineOffsetSeconds: Double = 30
-    private static let maximumLeadingTimelineOffsetSeconds: Double = 0.001
+    private var didNotifyFirstSample = false
+    var onFirstSampleWritten: (() -> Void)?
+    var onFailure: ((Error) -> Void)?
 
     init(
         url: URL,
@@ -29,7 +25,6 @@ final class AudioSampleFileWriter: @unchecked Sendable {
         format: SourceAudioFormat = .aac
     ) throws {
         self.url = url
-        self.timelineStartTime = timelineStartTime
         self.stereoBitrate = stereoBitrate
         self.format = format
         try? FileManager.default.removeItem(at: url)
@@ -41,13 +36,8 @@ final class AudioSampleFileWriter: @unchecked Sendable {
 
             let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             guard presentationTime.isValid else { return }
-            self.lastPresentationTime = presentationTime
 
-            if self.firstPresentationTime == nil {
-                self.firstPresentationTime = Self.recordingBaseline(
-                    timelineStartTime: self.timelineStartTime,
-                    firstSampleTime: presentationTime
-                )
+            if self.writer == nil {
                 do {
                     try self.prepareWriter(for: sampleBuffer)
                 } catch {
@@ -58,13 +48,16 @@ final class AudioSampleFileWriter: @unchecked Sendable {
 
             guard !self.paused,
                   let input = self.input,
-                  input.isReadyForMoreMediaData,
-                  let adjusted = self.copy(sampleBuffer, relativeTo: presentationTime) else {
+                  input.isReadyForMoreMediaData else {
                 return
             }
 
-            if input.append(adjusted) {
+            if input.append(sampleBuffer) {
                 self.wroteSample = true
+                if !self.didNotifyFirstSample {
+                    self.didNotifyFirstSample = true
+                    self.onFirstSampleWritten?()
+                }
             } else {
                 self.failWriting(
                     self.writer?.error ?? RecorderError.mediaWriteFailed("Audio writer rejected a sample.")
@@ -77,20 +70,12 @@ final class AudioSampleFileWriter: @unchecked Sendable {
         queue.async {
             guard !self.paused else { return }
             self.paused = true
-            self.pauseStartedAt = self.lastPresentationTime
         }
     }
 
     func resume() {
         queue.async {
             guard self.paused else { return }
-            if let start = self.pauseStartedAt, let end = self.lastPresentationTime {
-                let delta = CMTimeSubtract(end, start)
-                if delta.isValid, delta.seconds > 0 {
-                    self.pauseOffset = CMTimeAdd(self.pauseOffset, delta)
-                }
-            }
-            self.pauseStartedAt = nil
             self.paused = false
         }
     }
@@ -146,7 +131,7 @@ final class AudioSampleFileWriter: @unchecked Sendable {
         guard writer.startWriting() else {
             throw writer.error ?? RecorderError.writerNotReady
         }
-        writer.startSession(atSourceTime: .zero)
+        writer.startSession(atSourceTime: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
         self.writer = writer
         self.input = input
     }
@@ -178,114 +163,11 @@ final class AudioSampleFileWriter: @unchecked Sendable {
     }
 
     private func failWriting(_ error: Error) {
+        guard writeError == nil else { return }
         writeError = error
         finished = true
         writer?.cancelWriting()
         try? FileManager.default.removeItem(at: url)
-    }
-
-    private func copy(_ sampleBuffer: CMSampleBuffer, relativeTo presentationTime: CMTime) -> CMSampleBuffer? {
-        guard let firstPresentationTime else { return nil }
-
-        let elapsed = CMTimeSubtract(presentationTime, firstPresentationTime)
-        guard CMTimeCompare(elapsed, .zero) >= 0 else {
-            return nil
-        }
-        var outputTime = CMTimeSubtract(elapsed, pauseOffset)
-        if CMTimeCompare(outputTime, .zero) < 0 {
-            outputTime = .zero
-        }
-
-        var count: CMItemCount = 0
-        CMSampleBufferGetSampleTimingInfoArray(
-            sampleBuffer,
-            entryCount: 0,
-            arrayToFill: nil,
-            entriesNeededOut: &count
-        )
-        if count <= 0 {
-            count = 1
-        }
-
-        var timing = Array(
-            repeating: CMSampleTimingInfo(
-                duration: CMSampleBufferGetDuration(sampleBuffer),
-                presentationTimeStamp: presentationTime,
-                decodeTimeStamp: CMSampleBufferGetDecodeTimeStamp(sampleBuffer)
-            ),
-            count: count
-        )
-
-        timing.withUnsafeMutableBufferPointer { buffer in
-            _ = CMSampleBufferGetSampleTimingInfoArray(
-                sampleBuffer,
-                entryCount: count,
-                arrayToFill: buffer.baseAddress,
-                entriesNeededOut: &count
-            )
-        }
-
-        let delta = CMTimeSubtract(outputTime, presentationTime)
-        for index in timing.indices {
-            if timing[index].presentationTimeStamp.isValid {
-                timing[index].presentationTimeStamp = CMTimeAdd(timing[index].presentationTimeStamp, delta)
-            } else {
-                timing[index].presentationTimeStamp = outputTime
-            }
-
-            if timing[index].decodeTimeStamp.isValid {
-                timing[index].decodeTimeStamp = CMTimeAdd(timing[index].decodeTimeStamp, delta)
-            }
-        }
-
-        var adjusted: CMSampleBuffer?
-        let status = timing.withUnsafeBufferPointer { buffer in
-            CMSampleBufferCreateCopyWithNewTiming(
-                allocator: kCFAllocatorDefault,
-                sampleBuffer: sampleBuffer,
-                sampleTimingEntryCount: count,
-                sampleTimingArray: buffer.baseAddress,
-                sampleBufferOut: &adjusted
-            )
-        }
-
-        guard status == noErr else { return nil }
-        return adjusted
-    }
-
-    private static func recordingBaseline(timelineStartTime: CMTime?, firstSampleTime: CMTime) -> CMTime {
-        guard let timelineStartTime,
-              timelineStartTime.isValid,
-              firstSampleTime.isValid else {
-            return firstSampleTime
-        }
-
-        let offset = CMTimeSubtract(firstSampleTime, timelineStartTime).seconds
-        guard offset.isFinite,
-              abs(offset) <= maximumTrustedTimelineOffsetSeconds else {
-            NSLog(
-                "Audio writer ignoring mismatched timeline start offset %.3fs; using first sample time.",
-                offset
-            )
-            return firstSampleTime
-        }
-
-        if offset > maximumLeadingTimelineOffsetSeconds {
-            NSLog(
-                "Audio writer trimming %.3fs source startup gap; using first sample time.",
-                offset
-            )
-            return firstSampleTime
-        }
-
-        if offset < -maximumLeadingTimelineOffsetSeconds {
-            NSLog(
-                "Audio writer ignoring leading timeline start offset %.3fs; using first sample time.",
-                offset
-            )
-            return firstSampleTime
-        }
-
-        return timelineStartTime
+        onFailure?(error)
     }
 }

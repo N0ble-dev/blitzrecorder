@@ -2,15 +2,23 @@ import AVFoundation
 import CoreMedia
 import Foundation
 
-final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
+final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate,
+    AVCaptureFileOutputRecordingDelegate, @unchecked Sendable
+{
     private let session = AVCaptureSession()
     private let queue = DispatchQueue(label: "blitzrecorder.microphone")
-    private var writer: AudioSampleFileWriter?
+    private var fileOutput: AVCaptureAudioFileOutput?
+    private var outputURL: URL?
+    private var outputFileType: AVFileType = .m4a
+    private var recordingResult: Result<MediaWriterCompletion, Error>?
+    private var finishContinuation: CheckedContinuation<MediaWriterCompletion, Error>?
+    private var didRequestRecording = false
     private let levelPublisher = AudioLevelPublisher()
     var levelHandler: ((Float) -> Void)? {
         get { levelPublisher.levelHandler }
         set { levelPublisher.levelHandler = newValue }
     }
+    var failureHandler: ((Error) -> Void)?
     private var startupContinuation: CheckedContinuation<Void, Error>?
     private var startupTimeoutTask: Task<Void, Never>?
     private var hasProducedStartupSample = false
@@ -37,12 +45,12 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
 
             var didBeginConfiguration = false
             do {
-                writer = try AudioSampleFileWriter(
-                    url: url,
-                    timelineStartTime: timelineStartTime,
-                    stereoBitrate: settings.finalAudioBitrate,
-                    format: settings.effectiveSourceAudioFormat
-                )
+                try? FileManager.default.removeItem(at: url)
+                self.outputURL = url
+                outputFileType = settings.effectiveSourceAudioFormat.avFileType
+                recordingResult = nil
+                finishContinuation = nil
+                didRequestRecording = false
                 self.timelineStartTime = timelineStartTime
                 firstSampleTime = nil
                 hasProducedStartupSample = false
@@ -57,21 +65,41 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
                 }
                 session.addInput(input)
 
-                let output = AVCaptureAudioDataOutput()
-                output.setSampleBufferDelegate(self, queue: queue)
+                let output = AVCaptureAudioFileOutput()
+                output.audioSettings = Self.audioSettings(
+                    AudioFileOutputSettingsRequest(
+                        device: device,
+                        settings: settings
+                    )
+                )
                 guard session.canAddOutput(output) else {
-                    output.setSampleBufferDelegate(nil, queue: nil)
                     throw RecorderError.writerNotReady
                 }
                 session.addOutput(output)
+                fileOutput = output
+
+                let meterOutput = AVCaptureAudioDataOutput()
+                meterOutput.setSampleBufferDelegate(self, queue: queue)
+                guard session.canAddOutput(meterOutput) else {
+                    meterOutput.setSampleBufferDelegate(nil, queue: nil)
+                    throw RecorderError.writerNotReady
+                }
+                session.addOutput(meterOutput)
 
                 session.commitConfiguration()
                 didBeginConfiguration = false
                 if !session.isRunning {
                     session.startRunning()
                 }
+                didRequestRecording = true
+                output.startRecording(
+                    to: url,
+                    outputFileType: outputFileType,
+                    recordingDelegate: self
+                )
             } catch {
-                writer = nil
+                fileOutput = nil
+                outputURL = nil
                 if didBeginConfiguration {
                     AudioCaptureSessionCleanup.detachAudioOutputsAndRemoveAll(from: session)
                     session.commitConfiguration()
@@ -83,34 +111,24 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
     }
 
     func pause() {
-        writer?.pause()
+        queue.async {
+            guard self.fileOutput?.isRecording == true else { return }
+            self.fileOutput?.pauseRecording()
+        }
     }
 
     func resume() {
-        writer?.resume()
+        queue.async {
+            guard self.fileOutput?.isRecordingPaused == true else { return }
+            self.fileOutput?.resumeRecording()
+        }
     }
 
     func stop() async throws -> MediaWriterCompletion {
-        let writerToFinish = await withCheckedContinuation { continuation in
-            queue.async {
-                self.session.beginConfiguration()
-                AudioCaptureSessionCleanup.detachAudioOutputs(from: self.session)
-                self.session.commitConfiguration()
-                let writer = self.writer
-                self.writer = nil
-                continuation.resume(returning: writer)
-            }
-        }
-        do {
-            let completion = try await writerToFinish?.finish() ?? .empty()
-            await tearDownSession()
-            levelPublisher.reset()
-            return completion
-        } catch {
-            await tearDownSession()
-            levelPublisher.reset()
-            throw error
-        }
+        let completion = try await stopFileOutput()
+        await tearDownSession()
+        levelPublisher.reset()
+        return completion
     }
 
     func captureOutput(
@@ -118,15 +136,71 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
-        levelPublisher.publish(from: sampleBuffer)
-        if firstSampleTime == nil {
-            let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-            if presentationTime.isValid {
-                firstSampleTime = presentationTime
+        queue.async {
+            self.levelPublisher.publish(from: sampleBuffer)
+            if self.firstSampleTime == nil {
+                let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                if presentationTime.isValid {
+                    self.firstSampleTime = presentationTime
+                }
             }
         }
-        writer?.append(sampleBuffer)
-        completeStartup(.success(()))
+    }
+
+    func fileOutput(
+        _ output: AVCaptureFileOutput,
+        didStartRecordingTo fileURL: URL,
+        from connections: [AVCaptureConnection]
+    ) {
+        queue.async {
+            self.completeStartup(.success(()))
+        }
+    }
+
+    func fileOutput(
+        _ output: AVCaptureFileOutput,
+        didFinishRecordingTo outputFileURL: URL,
+        from connections: [AVCaptureConnection],
+        error: Error?
+    ) {
+        queue.async {
+            let result: Result<MediaWriterCompletion, Error>
+            if let error {
+                try? FileManager.default.removeItem(at: outputFileURL)
+                result = .failure(error)
+            } else if Self.hasRecordedAudio(at: outputFileURL) {
+                result = .success(.wrote(outputFileURL))
+            } else {
+                try? FileManager.default.removeItem(at: outputFileURL)
+                result = .success(.empty(outputFileURL))
+            }
+            self.recordingResult = result
+            self.completeStartup(result.map { _ in () })
+            if let continuation = self.finishContinuation {
+                self.finishContinuation = nil
+                continuation.resume(with: result)
+            } else if case .failure(let error) = result, self.hasProducedStartupSample {
+                self.failureHandler?(error)
+            }
+        }
+    }
+
+    private func stopFileOutput() async throws -> MediaWriterCompletion {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                if let recordingResult = self.recordingResult {
+                    continuation.resume(with: recordingResult)
+                    return
+                }
+                guard let output = self.fileOutput,
+                      output.isRecording else {
+                    continuation.resume(returning: .empty(self.outputURL))
+                    return
+                }
+                self.finishContinuation = continuation
+                output.stopRecording()
+            }
+        }
     }
 
     private func tearDownSession() async {
@@ -139,6 +213,9 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
                 self.session.beginConfiguration()
                 AudioCaptureSessionCleanup.detachAudioOutputsAndRemoveAll(from: self.session)
                 self.session.commitConfiguration()
+                self.fileOutput = nil
+                self.outputURL = nil
+                self.didRequestRecording = false
                 continuation.resume()
             }
         }
@@ -171,12 +248,44 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
         startupContinuation = nil
         startupTimeoutTask?.cancel()
         startupTimeoutTask = nil
-
-        switch result {
-        case .success:
-            continuation.resume()
-        case .failure(let error):
-            continuation.resume(throwing: error)
-        }
+        continuation.resume(with: result)
     }
+
+    private static func audioSettings(_ request: AudioFileOutputSettingsRequest) -> [String: Any] {
+        let streamDescription = CMAudioFormatDescriptionGetStreamBasicDescription(
+            request.device.activeFormat.formatDescription
+        )?.pointee
+        let sampleRate = streamDescription?.mSampleRate ?? 48_000
+        let channelCount = max(1, min(2, Int(streamDescription?.mChannelsPerFrame ?? 2)))
+        if request.settings.effectiveSourceAudioFormat.isLossless {
+            return [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: sampleRate,
+                AVNumberOfChannelsKey: channelCount,
+                AVLinearPCMBitDepthKey: 24,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false
+            ]
+        }
+        return [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: sampleRate,
+            AVNumberOfChannelsKey: channelCount,
+            AVEncoderBitRateKey: channelCount == 1
+                ? request.settings.finalAudioBitrate / 2
+                : request.settings.finalAudioBitrate
+        ]
+    }
+
+    private static func hasRecordedAudio(at url: URL) -> Bool {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber else { return false }
+        return size.int64Value > 0
+    }
+}
+
+private struct AudioFileOutputSettingsRequest {
+    let device: AVCaptureDevice
+    let settings: RecordingSettings
 }

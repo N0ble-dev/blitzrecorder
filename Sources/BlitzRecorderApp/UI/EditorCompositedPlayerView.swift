@@ -7,6 +7,7 @@ import SwiftUI
 struct EditorCompositedPlayer: NSViewRepresentable {
     let controller: EditorPlaybackController
     let renderSize: CGSize
+    let previewSceneRevision: Int
 
     func makeNSView(context: Context) -> EditorCompositedPlayerView {
         let view = EditorCompositedPlayerView()
@@ -17,6 +18,7 @@ struct EditorCompositedPlayer: NSViewRepresentable {
 
     func updateNSView(_ nsView: EditorCompositedPlayerView, context: Context) {
         nsView.controller = controller
+        nsView.previewSceneRevision = previewSceneRevision
         nsView.configure(renderSize: renderSize)
         nsView.refresh()
     }
@@ -36,6 +38,7 @@ final class EditorCompositedPlayerView: NSView {
     private var sourceLayers: [SceneLayerKind: SourceLayers] = [:]
     private var renderSize: CGSize = .zero
     private var renderedBackgroundKey: (style: CanvasBackgroundStyle, width: Int, height: Int)?
+    var previewSceneRevision = 0
 
     weak var controller: EditorPlaybackController?
     private var displayLink: CADisplayLink?
@@ -204,7 +207,8 @@ final class EditorCompositedPlayerView: NSView {
             height: sourceFrame.height * scale
         )
 
-        if kind == .camera, scene.cameraShadowEnabled {
+        let shadowEnabled = kind == .screen ? scene.screenShadowEnabled : scene.cameraShadowEnabled
+        if shadowEnabled {
             layers.shadowHost.shadowColor = CGColor(gray: 0, alpha: 1)
             layers.shadowHost.shadowRadius = 18 * scale
             layers.shadowHost.shadowOffset = CGSize(width: 0, height: 8 * scale)

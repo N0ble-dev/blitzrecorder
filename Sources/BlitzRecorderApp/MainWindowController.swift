@@ -64,7 +64,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         viewModel.onProjectOpened = { [weak self] in
             self?.showEditorAfterOpeningProject()
         }
-
         coordinator.onAudioLevel = { [weak self] source, level in
             self?.viewModel.appendAudioLevel(level, source: source)
         }
@@ -259,6 +258,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         viewModel.applyPostRecordingProjectOutput(output)
     }
 
+    func openProject(_ project: RecordingProjectHistory.Entry) {
+        viewModel.openProject(project)
+    }
+
     func applyRecoveryOutput(_ output: RecordingRecoveryOutput) {
         viewModel.applyRecoveryOutput(output)
     }
@@ -379,6 +382,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private struct ScreenCaptureSignature: Equatable {
         let usesPickedContent: Bool
         let selectionRevision: Int
+        let windowGeometryRevision: Int
         let screenSourceBinding: ScreenSourceBinding?
         let selectedDisplayID: String?
         let screenCrop: CGRect?
@@ -392,6 +396,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         return ScreenCaptureSignature(
             usesPickedContent: settings.usesPickedScreenContent,
             selectionRevision: coordinator.screenContentSelectionRevision,
+            windowGeometryRevision: coordinator.screenWindowGeometryRevision,
             screenSourceBinding: settings.screenSourceBinding,
             selectedDisplayID: settings.selectedDisplayID,
             screenCrop: settings.screenCrop,
@@ -483,6 +488,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             return "Enable Screen Recording to preview the selected source."
         }
         if let blocker = readiness.blockers.first {
+            if blocker.permission == "Camera availability" {
+                return blocker.status == "starting"
+                    ? "Starting camera preview."
+                    : "Camera unavailable. Choose another camera or close the app using it."
+            }
             return "\(blocker.source.rawValue) permission required."
         }
         return ""
@@ -552,6 +562,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     private func startCameraPreview() {
         if coordinator.settings.hiddenSources.contains(.camera) {
+            coordinator.setLocalCameraRuntimeState(.unchecked)
             Task { await coordinator.stopCameraPreview() }
             previewStage.cameraPreview.setMessage("Camera source hidden")
             previewStage.cameraPreview.isHidden = true
@@ -561,6 +572,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
 
         guard coordinator.settings.enabledSources.contains(.camera) else {
+            coordinator.setLocalCameraRuntimeState(.unchecked)
             Task { await coordinator.stopCameraPreview() }
             previewStage.cameraPreview.setMessage("Camera source off")
             previewStage.cameraPreview.isHidden = true
@@ -571,6 +583,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
         let selectedID = coordinator.settings.selectedCameraID
         if coordinator.isRemoteCameraSelected {
+            coordinator.setLocalCameraRuntimeState(.unchecked)
             previewStage.cameraPreview.isHidden = false
             cameraPreviewDeviceID = selectedID
             let name = coordinator.selectedRemoteCameraName() ?? "Remote iPhone"
@@ -596,6 +609,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         case .authorized:
             break
         case .notDetermined:
+            coordinator.setLocalCameraRuntimeState(.unchecked)
             previewStage.cameraPreview.isHidden = false
             previewStage.cameraPreview.setMessage("Allow Camera to preview")
             cameraPreviewDeviceID = nil
@@ -617,6 +631,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             refreshPermissionGate()
             return
         case .denied, .restricted:
+            coordinator.setLocalCameraRuntimeState(.unchecked)
             previewStage.cameraPreview.isHidden = false
             previewStage.cameraPreview.setMessage("Camera permission required")
             cameraPreviewDeviceID = nil
@@ -624,6 +639,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             refreshPermissionGate()
             return
         @unknown default:
+            coordinator.setLocalCameraRuntimeState(.unavailable("Camera authorization is unavailable"))
             previewStage.cameraPreview.isHidden = false
             previewStage.cameraPreview.setMessage("Camera unavailable")
             cameraPreviewDeviceID = nil
@@ -632,12 +648,21 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             return
         }
 
-        if isStartingCameraPreview, cameraPreviewDeviceID == selectedID { return }
-        if previewStage.cameraPreview.hasPreviewContent, cameraPreviewDeviceID == selectedID { return }
+        if isStartingCameraPreview, cameraPreviewDeviceID == selectedID {
+            coordinator.setLocalCameraRuntimeState(.starting)
+            return
+        }
+        if previewStage.cameraPreview.hasPreviewContent, cameraPreviewDeviceID == selectedID {
+            coordinator.setLocalCameraRuntimeState(.ready)
+            refreshPermissionGate()
+            return
+        }
 
         previewStage.cameraPreview.isHidden = false
         cameraPreviewDeviceID = selectedID
         isStartingCameraPreview = true
+        coordinator.setLocalCameraRuntimeState(.starting)
+        refreshPermissionGate()
         if !previewStage.cameraPreview.hasPreviewContent {
             previewStage.cameraPreview.setMessage("Starting camera")
         }
@@ -666,11 +691,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                 }
                 isStartingCameraPreview = false
                 cameraPreviewDeviceID = coordinator.settings.selectedCameraID
+                coordinator.setLocalCameraRuntimeState(.ready)
                 refreshPermissionGate()
             } catch {
                 isStartingCameraPreview = false
                 cameraPreviewDeviceID = nil
                 previewStage.cameraPreview.setMessage("Camera unavailable")
+                coordinator.setLocalCameraRuntimeState(.unavailable(error.localizedDescription))
                 viewModel.applyMessage("Camera preview failed: \(error.localizedDescription)")
                 refreshPermissionGate()
             }
@@ -702,6 +729,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func refreshCameraPicker() {
+        viewModel.refreshPermissionStatus()
         Task {
             await viewModel.refreshSources()
             viewModel.refreshRemoteCameraState()

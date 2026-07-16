@@ -6,6 +6,29 @@ import XCTest
 
 @MainActor
 final class RecorderCoordinatorAccessTests: XCTestCase {
+    func testScreenCaptureAdjustmentsRemainAvailableDuringRecordingAndPause() {
+        let defaults = temporaryDefaults()
+        let viewModel = RecorderViewModel(
+            coordinator: RecorderCoordinator(
+                accessController: AccessController(defaults: defaults),
+                defaults: defaults
+            ),
+            previewStage: PreviewStageView()
+        )
+
+        viewModel.applyState(.recording)
+        XCTAssertTrue(viewModel.canAdjustScreenCapture)
+        let liveDisplay = ScreenSourceBinding.display(id: "live-display")
+        viewModel.setScreenSource(liveDisplay)
+        XCTAssertEqual(viewModel.settings.screenSourceBinding, liveDisplay)
+
+        viewModel.applyState(.paused)
+        XCTAssertTrue(viewModel.canAdjustScreenCapture)
+
+        viewModel.applyState(.finishing)
+        XCTAssertFalse(viewModel.canAdjustScreenCapture)
+    }
+
     func testRecordingStartIsNotBlockedByLegacyExportCount() {
         let defaults = temporaryDefaults()
         let access = AccessController(defaults: defaults)
@@ -360,6 +383,7 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
         XCTAssertTrue(viewModel.isSourceConfigured(.screen))
         XCTAssertEqual(viewModel.settings.screenSourceBinding, appBinding)
         XCTAssertFalse(viewModel.settings.usesPickedScreenContent)
+        XCTAssertEqual(viewModel.selectedSource, .screen)
     }
 
     func testStartingStateClearsPostRecordingStatus() {
@@ -476,7 +500,7 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
             settings: settings,
             targetWindowInfo: nil,
             hasAccessibilityAccess: false,
-            canEditScene: true
+            canAdjustScreenCapture: true
         ))
     }
 
@@ -497,7 +521,7 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
             settings: settings,
             targetWindowInfo: nil,
             hasAccessibilityAccess: true,
-            canEditScene: true
+            canAdjustScreenCapture: true
         ))
     }
 
@@ -518,7 +542,7 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
             settings: settings,
             targetWindowInfo: nil,
             hasAccessibilityAccess: true,
-            canEditScene: true
+            canAdjustScreenCapture: true
         ))
     }
 
@@ -531,7 +555,7 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
             settings: settings,
             targetWindowInfo: nil,
             hasAccessibilityAccess: true,
-            canEditScene: true
+            canAdjustScreenCapture: true
         ))
     }
 
@@ -772,7 +796,7 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
             settings: settings,
             targetWindowInfo: nil,
             hasAccessibilityAccess: true,
-            canEditScene: true
+            canAdjustScreenCapture: true
         ))
     }
 
@@ -895,6 +919,64 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
         coordinator.beginScreenCropEditing()
 
         XCTAssertNil(coordinator.settings.screenCrop)
+    }
+
+    func testInitialInspectorSelectionUsesFrontmostVisibleVideoLayer() {
+        var settings = RecordingSettings()
+        settings.enabledSources = [.screen, .camera]
+        settings.hiddenSources = []
+        settings.sceneLayout = SceneLayout.presetLayout(.cameraInset, for: .horizontal)
+
+        XCTAssertEqual(
+            RecorderInspectorSelection.initial(settings: settings),
+            .source(.camera)
+        )
+    }
+
+    func testUnavailableCameraRuntimeBlocksOtherwiseReadyRecording() {
+        let ready = RecordingReadiness(
+            isReady: true,
+            title: "Start Recording",
+            detail: "Ready",
+            blockers: [],
+            statusLine: "Camera: authorized"
+        )
+        var settings = RecordingSettings()
+        settings.enabledSources = [.camera]
+        settings.hiddenSources = []
+
+        let readiness = LocalCameraRuntimeState.unavailable("Camera is in use")
+            .applying(.init(
+                readiness: ready,
+                settings: settings,
+                isRemoteCameraSelected: false
+            ))
+
+        XCTAssertFalse(readiness.isReady)
+        XCTAssertEqual(readiness.blockers.first?.permission, "Camera availability")
+        XCTAssertEqual(readiness.blockers.first?.status, "Camera is in use")
+    }
+
+    func testReadyCameraRuntimePreservesRecordingReadiness() {
+        let ready = RecordingReadiness(
+            isReady: true,
+            title: "Start Recording",
+            detail: "Ready",
+            blockers: [],
+            statusLine: "Camera: authorized"
+        )
+        var settings = RecordingSettings()
+        settings.enabledSources = [.camera]
+        settings.hiddenSources = []
+
+        let readiness = LocalCameraRuntimeState.ready
+            .applying(.init(
+                readiness: ready,
+                settings: settings,
+                isRemoteCameraSelected: false
+            ))
+
+        XCTAssertEqual(readiness, ready)
     }
 
     func testPreviewLayerSelectionSelectsMatchingSource() {

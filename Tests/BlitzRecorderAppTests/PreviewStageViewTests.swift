@@ -4,6 +4,27 @@ import XCTest
 
 @MainActor
 final class PreviewStageViewTests: XCTestCase {
+    func testCameraUnavailableMessageWrapsInsideNarrowSceneSlot() {
+        let preview = CameraPreviewView()
+        preview.frame = CGRect(x: 0, y: 0, width: 90, height: 220)
+
+        preview.setMessage("Camera unavailable")
+        preview.layoutSubtreeIfNeeded()
+
+        XCTAssertLessThanOrEqual(preview.messageFrameForTesting.width, preview.bounds.width + 0.001)
+        XCTAssertGreaterThan(preview.messageFrameForTesting.height, 20)
+    }
+
+    func testCameraUnavailableBackgroundFillsSelectedCameraFrame() {
+        let preview = CameraPreviewView()
+        preview.frame = CGRect(x: 0, y: 0, width: 90, height: 220)
+
+        preview.setMessage("Camera unavailable")
+        preview.layoutSubtreeIfNeeded()
+
+        XCTAssertRect(preview.messageBackgroundFrameForTesting, equals: preview.bounds)
+    }
+
     func testCameraPreviewImageUsesOverrideSourceAspectRatio() throws {
         let view = CameraPreviewView()
         let image = try makeTestImage(width: 1920, height: 1080)
@@ -381,7 +402,7 @@ final class PreviewStageViewTests: XCTestCase {
         XCTAssertRect(view.renderedScreenFrameForTesting, equals: expectedFrame)
     }
 
-    func testPaddingRoundsScreenAndFullscreenWebcamPreviewCorners() {
+    func testPaddingDoesNotRoundScreenOrFullscreenWebcamPreviewCorners() {
         let view = PreviewStageView()
         view.frame = NSRect(x: 0, y: 0, width: 1000, height: 700)
         view.captureLayout = .vertical
@@ -390,10 +411,10 @@ final class PreviewStageViewTests: XCTestCase {
         view.sceneLayout = SceneLayout.presetLayout(.webcamFullscreen, for: .vertical)
         view.layoutSubtreeIfNeeded()
 
-        XCTAssertGreaterThan(view.screenPreview.layer?.cornerRadius ?? 0, 0)
-        XCTAssertGreaterThan(view.cameraPreview.layer?.cornerRadius ?? 0, 0)
-        XCTAssertGreaterThan(view.screenPreview.layer?.borderWidth ?? 0, 0)
-        XCTAssertGreaterThan(view.cameraPreview.layer?.borderWidth ?? 0, 0)
+        XCTAssertEqual(view.screenPreview.layer?.cornerRadius, 0)
+        XCTAssertEqual(view.cameraPreview.layer?.cornerRadius, 0)
+        XCTAssertEqual(view.screenPreview.layer?.borderWidth, 0)
+        XCTAssertEqual(view.cameraPreview.layer?.borderWidth, 0)
     }
 
     func testFullWidthStackedSectionsStaySquareWhenPaddingIsDisabled() {
@@ -428,7 +449,7 @@ final class PreviewStageViewTests: XCTestCase {
             padding: view.canvasPadding
         )
         XCTAssertRect(view.renderedCameraFrameForTesting, equals: expectedFrame)
-        XCTAssertGreaterThan(view.cameraPreview.layer?.borderWidth ?? 0, 0)
+        XCTAssertEqual(view.cameraPreview.layer?.borderWidth, 0)
     }
 
     func testSwitchingToFullscreenScreenHidesCameraAndFillsCanvas() {

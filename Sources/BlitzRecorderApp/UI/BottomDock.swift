@@ -171,52 +171,40 @@ private struct ProjectReadyChip: View {
     @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 8) {
-            Button {
-                vm.openEditor()
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 13, weight: .semibold))
-                        .symbolRenderingMode(.hierarchical)
-                        .foregroundStyle(BlitzUI.mint)
-                    Text("Edit recording")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.94))
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white.opacity(hovering ? 0.76 : 0.46))
-                }
-                .padding(.horizontal, 14)
-                .frame(height: 40)
-                .background(
-                    BlitzUI.mint.opacity(hovering ? 0.18 : 0.11),
-                    in: .rect(cornerRadius: 12)
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(BlitzUI.mint.opacity(hovering ? 0.42 : 0.24), lineWidth: 1)
-                }
-                .contentShape(.rect(cornerRadius: 12))
+        Button {
+            vm.openEditor()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(BlitzUI.mint)
+                Text("Edit recording")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.94))
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white.opacity(hovering ? 0.76 : 0.46))
             }
-            .buttonStyle(.plain)
-            .onHover { hovering = $0 }
-            .pointingHandCursor()
-            .help("Open \(projectDetail) in Edit")
-
-            ProjectActionsMenu(vm: vm)
+            .padding(.horizontal, 14)
+            .frame(height: 40)
+            .background(
+                BlitzUI.mint.opacity(hovering ? 0.18 : 0.11),
+                in: .rect(cornerRadius: 12)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(BlitzUI.mint.opacity(hovering ? 0.42 : 0.24), lineWidth: 1)
+            }
+            .contentShape(.rect(cornerRadius: 12))
         }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .pointingHandCursor()
+        .help("Open \(projectDetail) in Edit")
         .animation(.easeOut(duration: 0.15), value: hovering)
         .contextMenu {
             Button("Open in Edit") { vm.openEditor() }
-            ProjectCorrectionMenuContent(vm: vm)
-            Menu("Export As") {
-                ForEach(OutputVideoFormat.allCases, id: \.self) { format in
-                    Button(format.displayName) {
-                        vm.exportLastProject(as: format)
-                    }
-                }
-            }
             Button("Show Source Files") {
                 vm.revealLastSourceTracks()
             }
@@ -263,11 +251,8 @@ private struct SavedRecordingChip: View {
             }
 
             if sourceTakeURL != nil {
-                HStack(spacing: 6) {
-                    DockActionButton(title: "Edit", systemImage: "rectangle.and.pencil.and.ellipsis", help: "Open this take in Edit") {
-                        vm.openEditor()
-                    }
-                    ProjectActionsMenu(vm: vm)
+                DockActionButton(title: "Edit", systemImage: "square.and.pencil", help: "Open this take in Edit") {
+                    vm.openEditor()
                 }
                 .fixedSize()
             }
@@ -288,14 +273,6 @@ private struct SavedRecordingChip: View {
             Button("Rename…") { vm.renameLastExportedFile() }
             if let sourceTakeURL {
                 Button("Open in Edit") { vm.openEditor() }
-                ProjectCorrectionMenuContent(vm: vm)
-                Menu("Export As") {
-                    ForEach(OutputVideoFormat.allCases, id: \.self) { format in
-                        Button(format.displayName) {
-                            vm.exportLastProject(as: format)
-                        }
-                    }
-                }
                 Button("Show Source Files") {
                     NSWorkspace.shared.activateFileViewerSelecting([sourceTakeURL])
                 }
@@ -318,110 +295,6 @@ private struct SavedRecordingChip: View {
             parts.append(sizeLabel)
         }
         return parts.joined(separator: " · ")
-    }
-}
-
-private struct ProjectActionsMenu: View {
-    @Bindable var vm: RecorderViewModel
-
-    var body: some View {
-        Menu {
-            ProjectCorrectionMenuContent(vm: vm)
-            Divider()
-            Menu("Export As") {
-                ForEach(OutputVideoFormat.allCases, id: \.self) { format in
-                    Button(format.displayName) {
-                        vm.exportLastProject(as: format)
-                    }
-                }
-            }
-            Button("Show Source Files") {
-                vm.revealLastSourceTracks()
-            }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 12, weight: .bold))
-                .frame(width: 28, height: 26)
-        }
-        .menuStyle(.button)
-        .controlSize(.small)
-        .help("More take actions")
-        .task(id: vm.lastExportedSourceTakeURL) {
-            vm.refreshLastExportedProject()
-        }
-    }
-}
-
-private struct ProjectCorrectionMenuContent: View {
-    @Bindable var vm: RecorderViewModel
-
-    var body: some View {
-        if let project = vm.lastExportedProject, !project.sceneEvents.isEmpty {
-            if project.sceneEvents.count == 1 {
-                Menu("Video Mix") {
-                    correctionButtons(eventIndex: 0, event: project.sceneEvents[0])
-                }
-            } else {
-                Menu("Mix Changes") {
-                    ForEach(Array(project.sceneEvents.enumerated()), id: \.offset) { index, event in
-                        Menu(segmentTitle(for: event, index: index)) {
-                            correctionButtons(eventIndex: index, event: event)
-                        }
-                    }
-                }
-            }
-        } else {
-            Button("No editable video mix") {}
-                .disabled(true)
-        }
-    }
-
-    @ViewBuilder
-    private func correctionButtons(
-        eventIndex: Int,
-        event: RecordingProject.SceneEventSnapshot
-    ) -> some View {
-        let selected = selectedCorrection(for: event)
-        ForEach(RecordingProjectSceneCorrection.allCases, id: \.self) { correction in
-            Button {
-                vm.applyProjectSceneCorrection(eventIndex: eventIndex, correction: correction)
-            } label: {
-                Label(
-                    correction.displayName,
-                    systemImage: correction == selected ? "checkmark" : correction.symbolName
-                )
-            }
-        }
-    }
-
-    private func selectedCorrection(for event: RecordingProject.SceneEventSnapshot) -> RecordingProjectSceneCorrection {
-        let sources = Set(event.scene.enabledSources.compactMap(CaptureSource.init(rawValue:)))
-        let hasScreen = sources.contains(.screen)
-        let hasCamera = sources.contains(.camera)
-        switch (hasScreen, hasCamera) {
-        case (true, true):
-            return .screenAndCamera
-        case (true, false):
-            return .screenOnly
-        case (false, true):
-            return .cameraOnly
-        default:
-            return .screenAndCamera
-        }
-    }
-
-    private func segmentTitle(for event: RecordingProject.SceneEventSnapshot, index: Int) -> String {
-        if index == 0 && event.time == 0 {
-            return "From 00:00"
-        }
-        return "From \(formatTime(event.time))"
-    }
-
-    private func formatTime(_ seconds: TimeInterval) -> String {
-        let totalSeconds = max(0, Int(seconds.rounded()))
-        let minutes = totalSeconds / 60
-        let seconds = totalSeconds % 60
-        return String(format: "%02d:%02d", minutes, seconds)
     }
 }
 

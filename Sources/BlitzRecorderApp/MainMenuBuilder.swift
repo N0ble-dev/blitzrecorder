@@ -157,9 +157,9 @@ final class MainMenuBuilder {
         let submenu = NSMenu(title: "View")
         submenu.addItem(menuItem("Toggle Rule of Thirds", action: #selector(MenuActionsTarget.toggleRuleOfThirds)))
         submenu.addItem(.separator())
-        submenu.addItem(menuItem("Zoom In", action: #selector(MenuActionsTarget.zoomIn), keyEquivalent: "+"))
-        submenu.addItem(menuItem("Zoom Out", action: #selector(MenuActionsTarget.zoomOut), keyEquivalent: "-"))
-        submenu.addItem(menuItem("Reset Zoom", action: #selector(MenuActionsTarget.resetZoom), keyEquivalent: "0"))
+        submenu.addItem(menuItem("Increase App Content Size", action: #selector(MenuActionsTarget.zoomIn), keyEquivalent: "+"))
+        submenu.addItem(menuItem("Decrease App Content Size", action: #selector(MenuActionsTarget.zoomOut), keyEquivalent: "-"))
+        submenu.addItem(menuItem("Reset App Content Size", action: #selector(MenuActionsTarget.resetZoom), keyEquivalent: "0"))
         item.submenu = submenu
         return item
     }

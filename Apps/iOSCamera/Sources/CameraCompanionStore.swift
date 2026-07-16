@@ -77,6 +77,9 @@ final class CameraCompanionStore {
     var hasCompletedPairing: Bool {
         isPairedWithMac
     }
+    var hasPairedMac: Bool {
+        isPairedWithMac || connectionSession.hasTrustedMac
+    }
     var isLiveCameraPreviewEnabled: Bool {
         !isScreenshotMode && isPairedWithMac && camera.isPreviewRunning
     }

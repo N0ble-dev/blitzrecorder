@@ -3,6 +3,21 @@ import CoreGraphics
 import XCTest
 
 final class ScreenCaptureGeometryTests: XCTestCase {
+    func testWindowSourceKeepsSceneCardFixed() {
+        var settings = RecordingSettings()
+        settings.screenSourceBinding = ScreenSourceBinding(
+            kind: .window,
+            displayID: "4",
+            bundleIdentifier: "com.example.App",
+            applicationName: "Example",
+            processID: 42,
+            windowID: 7,
+            windowTitle: "Example"
+        )
+
+        XCTAssertTrue(ScreenSourceGeometry(settings: settings).fillsSceneFrame)
+    }
+
     func testSceneLayoutDoesNotOverrideScreenSourceAspectRatio() {
         var settings = RecordingSettings()
         settings.layout = .vertical

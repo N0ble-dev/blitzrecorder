@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct RecordingSettingsPage: View {
+struct LegacyRecordingSettingsPage: View {
     @Bindable var vm: RecorderViewModel
 
     var body: some View {
@@ -95,17 +95,22 @@ private struct RecordingStorageSettings: View {
                 )
             )
 
-            toggleRow(
-                title: "Auto-name from speech",
-                systemImage: "text.bubble",
-                description: "Requests Speech Recognition after a mic recording, then uses the transcript for the filename.",
-                isOn: Binding(
-                    get: { vm.settings.renamesRecordingsFromSpeech },
-                    set: { vm.setSpeechRenameEnabled($0) }
-                )
+            LocalTranscriptionSettings(
+                controller: vm.transcriptionController
             )
 
             recentProjectsSection
+        }
+        .sheet(item: presentedTranscriptBinding) { presented in
+            TranscriptDetailView(TranscriptDetailView.Request(
+                presented: presented,
+                onSave: { transcript in
+                    vm.transcriptionController.savePresentedTranscript(transcript)
+                },
+                onReveal: {
+                    vm.transcriptionController.revealPresentedTranscript()
+                }
+            ))
         }
     }
 
@@ -136,70 +141,152 @@ private struct RecordingStorageSettings: View {
             } else {
                 VStack(spacing: 6) {
                     ForEach(vm.recentProjects.prefix(4), id: \.id) { project in
-                        let isOpening = openingRecentProjectID == project.id
-                        HStack(spacing: 6) {
-                            Button {
-                                openingRecentProjectID = project.id
-                                Task {
-                                    await Task.yield()
-                                    vm.openProject(project)
-                                    openingRecentProjectID = nil
-                                }
-                            } label: {
-                                HStack(spacing: 8) {
-                                    if isOpening {
-                                        ProgressView()
-                                            .controlSize(.small)
-                                            .frame(width: 16)
-                                    } else {
-                                        Image(systemName: "rectangle.and.pencil.and.ellipsis")
-                                            .font(.system(size: 11, weight: .semibold))
-                                            .foregroundStyle(BlitzUI.mint.opacity(0.82))
-                                            .frame(width: 16)
-                                    }
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(project.title)
-                                            .font(.system(size: 11, weight: .bold))
-                                            .foregroundStyle(.white.opacity(0.82))
-                                            .lineLimit(1)
-                                        Text(project.takeDirectoryPath)
-                                            .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                            .foregroundStyle(.white.opacity(0.44))
-                                            .lineLimit(1)
-                                            .truncationMode(.middle)
-                                    }
-                                    Spacer(minLength: 0)
-                                    Image(systemName: isOpening ? "hourglass" : "arrow.right")
-                                        .font(.system(size: 10, weight: .bold))
-                                        .foregroundStyle(.white.opacity(isOpening ? 0.52 : 0.36))
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 8)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(openingRecentProjectID != nil)
-                            .pointingHandCursor()
-                            .help("Open project review")
-
-                            Button {
-                                vm.revealProject(project)
-                            } label: {
-                                Image(systemName: "folder")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .frame(width: 28, height: 28)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.white.opacity(0.56))
-                            .disabled(openingRecentProjectID != nil)
-                            .pointingHandCursor()
-                            .help("Reveal source tracks")
-                        }
-                        .background(Color.white.opacity(0.04), in: .rect(cornerRadius: 8))
+                        recentProjectRow(project)
                     }
                 }
             }
         }
         .padding(.top, 2)
+    }
+
+    private func recentProjectRow(
+        _ project: RecordingProjectHistory.Entry
+    ) -> some View {
+        let isOpening = openingRecentProjectID == project.id
+        return HStack(spacing: 6) {
+            Button {
+                openingRecentProjectID = project.id
+                Task {
+                    await Task.yield()
+                    vm.openProject(project)
+                    openingRecentProjectID = nil
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    if isOpening {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: 16)
+                    } else {
+                        Image(systemName: "rectangle.and.pencil.and.ellipsis")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(BlitzUI.mint.opacity(0.82))
+                            .frame(width: 16)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(project.title)
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.82))
+                            .lineLimit(1)
+                        Text(project.takeDirectoryPath)
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.44))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: isOpening ? "hourglass" : "arrow.right")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white.opacity(isOpening ? 0.52 : 0.36))
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+            }
+            .buttonStyle(.plain)
+            .disabled(openingRecentProjectID != nil)
+            .pointingHandCursor()
+            .help("Open project review")
+
+            Button {
+                vm.revealProject(project)
+            } label: {
+                Image(systemName: "folder")
+                    .font(.system(size: 11, weight: .bold))
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white.opacity(0.56))
+            .disabled(openingRecentProjectID != nil)
+            .pointingHandCursor()
+            .help("Reveal source tracks")
+
+            transcriptButton(project)
+        }
+        .background(Color.white.opacity(0.04), in: .rect(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private func transcriptButton(
+        _ project: RecordingProjectHistory.Entry
+    ) -> some View {
+        let status = vm.transcriptionController.status(for: project)
+        Button {
+            switch status {
+            case .ready:
+                vm.transcriptionController.presentTranscript(for: project)
+            case .queued, .preparingAudio, .transcribing, .diarizing, .saving:
+                break
+            case .notGenerated, .waitingForModel, .failed:
+                vm.transcriptionController.retry(
+                    .project(URL(fileURLWithPath: project.projectPath))
+                )
+            }
+        } label: {
+            Group {
+                if status.isRunning {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: transcriptIcon(status))
+                        .font(.system(size: 11, weight: .bold))
+                }
+            }
+            .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(transcriptColor(status))
+        .disabled(openingRecentProjectID != nil || status.isRunning)
+        .pointingHandCursor()
+        .help(status.label)
+    }
+
+    private func transcriptIcon(_ status: TranscriptionJobStatus) -> String {
+        switch status {
+        case .ready:
+            return "doc.text.fill"
+        case .failed:
+            return "exclamationmark.triangle.fill"
+        case .waitingForModel:
+            return "arrow.down.circle"
+        case .notGenerated:
+            return "waveform.badge.plus"
+        case .queued, .preparingAudio, .transcribing, .diarizing, .saving:
+            return "ellipsis"
+        }
+    }
+
+    private func transcriptColor(_ status: TranscriptionJobStatus) -> Color {
+        switch status {
+        case .ready:
+            return BlitzUI.mint
+        case .failed:
+            return BlitzUI.warning
+        case .notGenerated, .waitingForModel:
+            return .white.opacity(0.48)
+        case .queued, .preparingAudio, .transcribing, .diarizing, .saving:
+            return .white.opacity(0.62)
+        }
+    }
+
+    private var presentedTranscriptBinding: Binding<PresentedTranscript?> {
+        Binding(
+            get: { vm.transcriptionController.presentedTranscript },
+            set: { newValue in
+                if newValue == nil {
+                    vm.transcriptionController.dismissPresentedTranscript()
+                }
+            }
+        )
     }
 
     private func toggleRow(
@@ -227,6 +314,85 @@ private struct RecordingStorageSettings: View {
                 .padding(.top, 1)
         }
         .disabled(vm.state != .idle)
+    }
+}
+
+private struct LocalTranscriptionSettings: View {
+    @Bindable var controller: LocalTranscriptionController
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Label("Local transcription", systemImage: "waveform.badge.mic")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.88))
+                Spacer(minLength: 0)
+                modelAction
+            }
+
+            Text("Parakeet transcription and speaker diarization run on this Mac.")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.white.opacity(0.52))
+
+            Toggle(
+                "Automatically transcribe finished recordings",
+                isOn: $controller.isAutomaticEnabled
+            )
+            .font(.system(size: 10, weight: .semibold))
+            .toggleStyle(.switch)
+
+            if case .downloading(let progress, let phase) = controller.modelState {
+                VStack(alignment: .leading, spacing: 5) {
+                    ProgressView(value: progress)
+                        .tint(BlitzUI.mint)
+                    Text(phase)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.48))
+                }
+            }
+
+            if case .failed(let message) = controller.modelState {
+                Text(message)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(BlitzUI.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+        .background(Color.white.opacity(0.04), in: .rect(cornerRadius: 10))
+    }
+
+    @ViewBuilder
+    private var modelAction: some View {
+        switch controller.modelState {
+        case .notDownloaded, .failed:
+            Button("Download model") {
+                controller.downloadModels()
+            }
+            .blitzGlassButton()
+            .pointingHandCursor()
+        case .downloading:
+            Text("Downloading")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white.opacity(0.5))
+        case .ready(let size):
+            HStack(spacing: 8) {
+                Text(ByteCountFormatter.string(
+                    fromByteCount: size,
+                    countStyle: .file
+                ))
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.white.opacity(0.44))
+                Button("Remove") {
+                    controller.removeModels()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white.opacity(0.64))
+                .pointingHandCursor()
+            }
+        }
     }
 }
 

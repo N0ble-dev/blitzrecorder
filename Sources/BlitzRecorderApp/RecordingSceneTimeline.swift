@@ -181,6 +181,8 @@ extension RecordingScene {
         canvasPadding > 0.001
             || canvasBackgroundStyle != .black
             || canvasBackgroundAnimated
+            || screenCornerRadius > 0.001
+            || screenShadowEnabled
             || cameraShadowEnabled
     }
 }

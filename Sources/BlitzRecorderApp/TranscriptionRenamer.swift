@@ -1,6 +1,10 @@
 import Foundation
 import Speech
 
+#if canImport(FoundationModels)
+import FoundationModels
+#endif
+
 final class SpeechTranscriber {
     func transcribe(audioURL: URL) async throws -> String {
         let authorizationStatus = await withCheckedContinuation { continuation in
@@ -44,6 +48,62 @@ final class SpeechTranscriber {
 }
 
 struct TitleGenerator {
+    struct TranscriptTitleRequest {
+        let transcript: String
+    }
+
+    private struct OllamaGenerationRequest {
+        let model: String
+        let prompt: String
+    }
+
+    func title(
+        _ request: TranscriptTitleRequest
+    ) async throws -> String {
+        let transcript = request.transcript.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard Self.hasUsableTitleSignal(transcript) else {
+            throw TranscriptTitleGenerationError.transcriptTooShort
+        }
+
+        var lastError: Error?
+
+        #if canImport(FoundationModels)
+        if #available(macOS 26.0, *) {
+            do {
+                let title = try await foundationModelTitle(for: transcript)
+                if let sanitized = Self.sanitizeGeneratedTitle(title) {
+                    return sanitized
+                }
+            } catch {
+                lastError = error
+            }
+        }
+        #endif
+
+        for model in ["qwen2.5:0.5b", "llama3.2:1b", "gemma3:1b"] {
+            do {
+                let generated = try await ollamaGenerate(
+                    OllamaGenerationRequest(
+                        model: model,
+                        prompt: Self.titlePrompt(for: transcript)
+                    )
+                )
+                if let title = Self.sanitizeGeneratedTitle(generated) {
+                    return title
+                }
+            } catch {
+                lastError = error
+            }
+        }
+
+        if let lastError {
+            throw lastError
+        }
+        throw TranscriptTitleGenerationError.modelUnavailable
+    }
+
     func titleSlug(for transcript: String) async -> String? {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard Self.hasUsableTitleSignal(trimmed) else {
@@ -51,29 +111,7 @@ struct TitleGenerator {
         }
 
         for model in ["qwen2.5:0.5b", "llama3.2:1b", "gemma3:1b"] {
-            if let slug = try? await ollamaSlug(model: model, transcript: trimmed),
-               Self.hasUsableTitleSignal(slug) {
-                return slug
-            }
-        }
-
-        return fallbackSlug(from: trimmed)
-    }
-
-    private func ollamaSlug(model: String, transcript: String) async throws -> String {
-        guard let url = URL(string: "http://127.0.0.1:11434/api/generate") else {
-            return ""
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 6
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let clippedTranscript = String(transcript.prefix(2_800))
-        let body = OllamaGenerateRequest(
-            model: model,
-            prompt: """
+            let prompt = """
             Create a short YouTube filename slug from this transcript.
             Rules:
             - 3 to 8 words
@@ -83,20 +121,46 @@ struct TitleGenerator {
             - no extension
 
             Transcript:
-            \(clippedTranscript)
-            """,
+            \(String(trimmed.prefix(2_800)))
+            """
+            if let generated = try? await ollamaGenerate(
+                OllamaGenerationRequest(model: model, prompt: prompt)
+            ),
+               let slug = Self.sanitizeSlug(generated),
+               Self.hasUsableTitleSignal(slug) {
+                return slug
+            }
+        }
+
+        return fallbackSlug(from: trimmed)
+    }
+
+    private func ollamaGenerate(
+        _ request: OllamaGenerationRequest
+    ) async throws -> String {
+        guard let url = URL(string: "http://127.0.0.1:11434/api/generate") else {
+            throw TranscriptTitleGenerationError.modelUnavailable
+        }
+
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.timeoutInterval = 6
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body = OllamaGenerateRequest(
+            model: request.model,
+            prompt: request.prompt,
             stream: false
         )
-        request.httpBody = try JSONEncoder().encode(body)
+        urlRequest.httpBody = try JSONEncoder().encode(body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: urlRequest)
         guard let httpResponse = response as? HTTPURLResponse,
               (200..<300).contains(httpResponse.statusCode),
               let generated = try? JSONDecoder().decode(OllamaGenerateResponse.self, from: data).response else {
-            return ""
+            throw TranscriptTitleGenerationError.modelUnavailable
         }
 
-        return sanitize(generated)
+        return generated
     }
 
     private func fallbackSlug(from transcript: String) -> String? {
@@ -112,10 +176,88 @@ struct TitleGenerator {
         guard words.count >= 3 else {
             return nil
         }
-        return sanitize(words.prefix(7).joined(separator: "-"))
+        return Self.sanitizeSlug(words.prefix(7).joined(separator: "-"))
     }
 
-    private func sanitize(_ value: String) -> String {
+    static func sanitizeGeneratedTitle(
+        _ value: String
+    ) -> String? {
+        var title = value
+            .split(whereSeparator: \.isNewline)
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? ""
+
+        for prefix in ["Title:", "Suggested title:", "Video title:"] {
+            if title.lowercased().hasPrefix(prefix.lowercased()) {
+                title = String(title.dropFirst(prefix.count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        title = title.trimmingCharacters(
+            in: CharacterSet(charactersIn: "\"'`*_# ")
+        )
+        title = title.trimmingCharacters(
+            in: CharacterSet(charactersIn: ".!?:;-")
+        )
+        let words = title
+            .split(whereSeparator: \.isWhitespace)
+            .prefix(10)
+        title = words.joined(separator: " ")
+        if title.count > 96 {
+            title = String(title.prefix(96))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        guard hasUsableTitleSignal(title) else {
+            return nil
+        }
+        return title
+    }
+
+    static func condensedTranscript(
+        _ transcript: String
+    ) -> String {
+        let limit = 6_000
+        guard transcript.count > limit else { return transcript }
+
+        let head = String(transcript.prefix(3_000))
+        let tail = String(transcript.suffix(1_500))
+        let middleStart = transcript.index(
+            transcript.startIndex,
+            offsetBy: max(0, transcript.count / 2 - 750)
+        )
+        let middleEnd = transcript.index(
+            middleStart,
+            offsetBy: min(1_500, transcript.distance(
+                from: middleStart,
+                to: transcript.endIndex
+            ))
+        )
+        let middle = String(transcript[middleStart..<middleEnd])
+        return "\(head)\n\n[Middle]\n\(middle)\n\n[End]\n\(tail)"
+    }
+
+    private static func titlePrompt(
+        for transcript: String
+    ) -> String {
+        """
+        Read this recording transcript and identify its main subject.
+        Return one concise, specific video title in the transcript's language.
+        Use 4 to 10 words.
+        Do not use quotes, markdown, a filename slug, or generic phrases.
+        Return only the title.
+
+        Transcript:
+        \(condensedTranscript(transcript))
+        """
+    }
+
+    private static func sanitizeSlug(
+        _ value: String
+    ) -> String? {
         let lowercased = value.lowercased()
         let parts = lowercased
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
@@ -123,7 +265,7 @@ struct TitleGenerator {
 
         let slug = parts.joined(separator: "-")
         if slug.isEmpty {
-            return ""
+            return nil
         }
         return String(slug.prefix(72)).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
     }
@@ -140,6 +282,43 @@ struct TitleGenerator {
             word.count > 2 && !fillerWords.contains(word)
         }
         return meaningfulWords.count >= 3
+    }
+
+    #if canImport(FoundationModels)
+    @available(macOS 26.0, *)
+    private func foundationModelTitle(
+        for transcript: String
+    ) async throws -> String {
+        let model = SystemLanguageModel.default
+        guard model.availability == .available else {
+            throw TranscriptTitleGenerationError.modelUnavailable
+        }
+        let session = LanguageModelSession(
+            model: model,
+            instructions: """
+            You create concise, accurate titles for screen recordings.
+            Base the title on the main subject discussed throughout the transcript.
+            Preserve the transcript's language.
+            """
+        )
+        return try await session.respond(
+            to: Self.titlePrompt(for: transcript)
+        ).content
+    }
+    #endif
+}
+
+enum TranscriptTitleGenerationError: LocalizedError {
+    case transcriptTooShort
+    case modelUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .transcriptTooShort:
+            return "The transcript is too short to generate a useful title."
+        case .modelUnavailable:
+            return "No local AI model is available for title generation."
+        }
     }
 }
 

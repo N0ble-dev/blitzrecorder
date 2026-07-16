@@ -13,6 +13,56 @@ struct RecordingReadiness: Equatable {
     let statusLine: String
 }
 
+enum LocalCameraRuntimeState: Equatable {
+    struct ReadinessRequest {
+        let readiness: RecordingReadiness
+        let settings: RecordingSettings
+        let isRemoteCameraSelected: Bool
+    }
+
+    case unchecked
+    case starting
+    case ready
+    case unavailable(String)
+
+    func applying(_ request: ReadinessRequest) -> RecordingReadiness {
+        guard request.settings.enabledSources.contains(.camera),
+              !request.isRemoteCameraSelected else {
+            return request.readiness
+        }
+
+        let blocker: PermissionBlocker
+        switch self {
+        case .unchecked, .ready:
+            return request.readiness
+        case .starting:
+            blocker = PermissionBlocker(
+                source: .camera,
+                permission: "Camera availability",
+                status: "starting",
+                recovery: "Wait for the camera preview before recording."
+            )
+        case .unavailable(let reason):
+            blocker = PermissionBlocker(
+                source: .camera,
+                permission: "Camera availability",
+                status: reason,
+                recovery: "Choose another camera or close the app currently using it."
+            )
+        }
+
+        let blockers = request.readiness.blockers + [blocker]
+        let statusLine = "\(request.readiness.statusLine) | Camera: \(blocker.status)"
+        return RecordingReadiness(
+            isReady: false,
+            title: request.readiness.title,
+            detail: "Start disabled: \(statusLine)",
+            blockers: blockers,
+            statusLine: statusLine
+        )
+    }
+}
+
 struct PermissionBlocker: Equatable {
     let source: CaptureSource
     let permission: String
@@ -41,6 +91,9 @@ extension Array where Element == PermissionBlocker {
         }
         if contains(where: { $0.permission == "Screen source" }) {
             return "Pick a screen or app to record"
+        }
+        if let cameraBlocker = first(where: { $0.permission == "Camera availability" }) {
+            return cameraBlocker.status == "starting" ? "Camera is starting" : "Camera unavailable"
         }
         if contains(where: { $0.source == .screen }),
            !contains(where: { $0.source == .systemAudio }) {
@@ -337,7 +390,9 @@ final class PermissionGate {
     }
 
     func writeDiagnostic(_ readiness: RecordingReadiness) {
-        let line = "\(Date()) pid=\(ProcessInfo.processInfo.processIdentifier) ready=\(readiness.isReady) \(readiness.statusLine)\n"
+        let accessibility = hasAccessibilityAccess ? "allowed" : "not allowed"
+        let line = "\(Date()) pid=\(ProcessInfo.processInfo.processIdentifier) "
+            + "ready=\(readiness.isReady) Accessibility: \(accessibility) | \(readiness.statusLine)\n"
         let url = URL(fileURLWithPath: "/tmp/BlitzRecorder.permission-state.log")
         guard let data = line.data(using: .utf8) else { return }
 

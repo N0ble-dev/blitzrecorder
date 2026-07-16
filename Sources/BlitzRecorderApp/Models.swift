@@ -211,6 +211,50 @@ enum OutputVideoFormat: String, CaseIterable {
     }
 }
 
+enum ExportVideoQuality: String, CaseIterable {
+    case standard
+    case high
+    case maximum
+
+    var displayName: String {
+        switch self {
+        case .standard:
+            return "Standard"
+        case .high:
+            return "High"
+        case .maximum:
+            return "Maximum"
+        }
+    }
+
+    var plainDescription: String {
+        switch self {
+        case .standard:
+            return "Smaller file"
+        case .high:
+            return "Recommended"
+        case .maximum:
+            return "Largest file"
+        }
+    }
+
+    func videoBitrate(baseBitrate: Int) -> Int {
+        let multiplier: Double
+        switch self {
+        case .standard:
+            multiplier = 0.72
+        case .high:
+            multiplier = 1
+        case .maximum:
+            multiplier = 1.5
+        }
+        return min(
+            RecordingSettings.maxCustomVideoBitrate,
+            max(RecordingSettings.minCustomVideoBitrate, Int(Double(baseBitrate) * multiplier))
+        )
+    }
+}
+
 enum AudioQuality: String, CaseIterable {
     case standard
     case high
@@ -343,6 +387,24 @@ enum CaptureSource: String, CaseIterable {
 enum SceneLayerKind: String, CaseIterable {
     case screen = "Screen"
     case camera = "Camera"
+}
+
+struct EditorExportRequest {
+    let outputFormat: OutputVideoFormat
+    let outputResolution: OutputResolution
+    let videoQuality: ExportVideoQuality
+    let hiddenVideoSources: Set<SceneLayerKind>
+    let mutedAudioSources: Set<CaptureSource>
+}
+
+struct ProjectExportRequest {
+    let projectURL: URL
+    let outputFormat: OutputVideoFormat
+    let outputResolution: OutputResolution
+    let videoQuality: ExportVideoQuality
+    let destinationURL: URL
+    let hiddenVideoSources: Set<SceneLayerKind>
+    let mutedAudioSources: Set<CaptureSource>
 }
 
 enum CameraInsetAlignment: String, CaseIterable {
@@ -1068,6 +1130,8 @@ struct RecordingScene: Equatable {
     var canvasBackgroundStyle: CanvasBackgroundStyle
     var canvasBackgroundAnimated: Bool
     var canvasPadding: CGFloat
+    var screenCornerRadius: CGFloat
+    var screenShadowEnabled: Bool
     var cameraContentMode: CameraContentMode
     var cameraFramePadding: CGFloat
     var cameraShadowEnabled: Bool
@@ -1085,6 +1149,8 @@ struct RecordingScene: Equatable {
             canvasBackgroundStyle: settings.canvasBackgroundStyle,
             canvasBackgroundAnimated: settings.canvasBackgroundAnimated,
             canvasPadding: settings.canvasPadding,
+            screenCornerRadius: settings.screenCornerRadius,
+            screenShadowEnabled: settings.screenShadowEnabled,
             cameraContentMode: settings.cameraContentMode,
             cameraFramePadding: 0,
             cameraShadowEnabled: settings.cameraShadowEnabled
@@ -1102,6 +1168,8 @@ struct RecordingScene: Equatable {
         canvasBackgroundStyle: CanvasBackgroundStyle = .black,
         canvasBackgroundAnimated: Bool = false,
         canvasPadding: CGFloat = 0,
+        screenCornerRadius: CGFloat = 0,
+        screenShadowEnabled: Bool = false,
         cameraContentMode: CameraContentMode = .fill,
         cameraFramePadding: CGFloat = 0,
         cameraShadowEnabled: Bool = false,
@@ -1117,6 +1185,8 @@ struct RecordingScene: Equatable {
         self.canvasBackgroundStyle = canvasBackgroundStyle
         self.canvasBackgroundAnimated = canvasBackgroundAnimated
         self.canvasPadding = canvasPadding
+        self.screenCornerRadius = screenCornerRadius
+        self.screenShadowEnabled = screenShadowEnabled
         self.cameraContentMode = cameraContentMode
         self.cameraFramePadding = 0
         self.cameraShadowEnabled = cameraShadowEnabled
@@ -1136,17 +1206,20 @@ struct RecordingScene: Equatable {
 
 struct ScreenSourceGeometry: Equatable {
     var usesPickedContent: Bool
+    var fillsSceneFrame: Bool
     var selectedDisplayID: String?
     var normalizedCrop: CGRect?
     var sourceAspectRatio: CGFloat?
 
     init(
         usesPickedContent: Bool = false,
+        fillsSceneFrame: Bool = false,
         selectedDisplayID: String? = nil,
         normalizedCrop: CGRect? = nil,
         sourceAspectRatio: CGFloat? = nil
     ) {
         self.usesPickedContent = usesPickedContent
+        self.fillsSceneFrame = fillsSceneFrame
         self.selectedDisplayID = selectedDisplayID
         self.normalizedCrop = normalizedCrop
         self.sourceAspectRatio = sourceAspectRatio
@@ -1155,10 +1228,19 @@ struct ScreenSourceGeometry: Equatable {
     init(settings: RecordingSettings, sourceAspectRatio: CGFloat? = nil) {
         self.init(
             usesPickedContent: settings.usesPickedScreenContent,
+            fillsSceneFrame: Self.fillsSceneFrame(for: settings),
             selectedDisplayID: settings.selectedDisplayID,
-            normalizedCrop: settings.screenCrop,
+            normalizedCrop: ScreenCaptureGeometry.effectiveCrop(for: settings),
             sourceAspectRatio: sourceAspectRatio
         )
+    }
+
+    static func fillsSceneFrame(for settings: RecordingSettings) -> Bool {
+        if settings.usesPickedScreenContent {
+            return true
+        }
+        return settings.screenSourceBinding?.kind == .application
+            || settings.screenSourceBinding?.kind == .window
     }
 
     func aspectRatio(fallback: CGFloat = SceneLayout.defaultScreenAspectRatio) -> CGFloat {
@@ -1316,6 +1398,8 @@ struct RecordingSettings {
     var canvasBackgroundStyle: CanvasBackgroundStyle = .black
     var canvasBackgroundAnimated: Bool = false
     var canvasPadding: CGFloat = 0
+    var screenCornerRadius: CGFloat = 0
+    var screenShadowEnabled: Bool = false
     var cameraContentMode: CameraContentMode = .fill
     var cameraFramePadding: CGFloat = 0
     var cameraShadowEnabled: Bool = false

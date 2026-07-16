@@ -93,15 +93,16 @@ struct BlitzScenePresetCard: View {
             }
             .padding(8)
             .frame(maxWidth: .infinity, minHeight: 82)
-            .contentShape(.rect(cornerRadius: 13))
+            .background(cardFill, in: .rect(cornerRadius: 13))
+            .overlay {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .strokeBorder(cardStroke, lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+            .contentShape(.rect)
         }
         .buttonStyle(BlitzScenePresetButtonStyle())
-        .background(cardFill, in: .rect(cornerRadius: 13))
-        .overlay {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .strokeBorder(cardStroke, lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+        .contentShape(.rect)
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.14), value: isHovering)
         .animation(.easeOut(duration: 0.18), value: isSelected)

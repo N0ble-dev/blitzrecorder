@@ -10,6 +10,7 @@ REQUIRE_NOTARIZED="${REQUIRE_NOTARIZED:-0}"
 ASSESS_DMG="${ASSESS_DMG:-$REQUIRE_NOTARIZED}"
 EVIDENCE_DIR="${EVIDENCE_DIR:-$ROOT/build/ReleaseEvidence/dmg}"
 MOUNT_POINT=""
+INSTALL_VALIDATION_ROOT=""
 
 usage() {
   cat <<'USAGE'
@@ -92,6 +93,9 @@ cleanup() {
   if [[ -n "$MOUNT_POINT" ]]; then
     hdiutil detach "$MOUNT_POINT" >"$EVIDENCE_DIR/hdiutil-detach.log" 2>&1 || true
   fi
+  if [[ -n "$INSTALL_VALIDATION_ROOT" ]]; then
+    rm -rf "$INSTALL_VALIDATION_ROOT"
+  fi
 }
 trap cleanup EXIT
 
@@ -136,12 +140,8 @@ if [[ -z "$MOUNT_POINT" ]]; then
 fi
 
 APP_PATH="$MOUNT_POINT/BlitzRecorder.app"
-BINARY_PATH="$APP_PATH/Contents/MacOS/BlitzRecorder"
-INFO_PLIST="$APP_PATH/Contents/Info.plist"
 
 [[ -d "$APP_PATH" ]] || { echo "error: app is missing in DMG: $APP_PATH" >&2; exit 1; }
-[[ -x "$BINARY_PATH" ]] || { echo "error: app binary is not executable: $BINARY_PATH" >&2; exit 1; }
-[[ -f "$INFO_PLIST" ]] || { echo "error: Info.plist is missing: $INFO_PLIST" >&2; exit 1; }
 
 for SUPPORT_NAME in ".background" ".VolumeIcon.icns"; do
   SUPPORT_PATH="$MOUNT_POINT/$SUPPORT_NAME"
@@ -154,6 +154,16 @@ for SUPPORT_NAME in ".background" ".VolumeIcon.icns"; do
     fi
   fi
 done
+
+INSTALL_VALIDATION_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/blitzrecorder-dmg-install.XXXXXX")"
+ditto "$APP_PATH" "$INSTALL_VALIDATION_ROOT/BlitzRecorder.app"
+xattr -cr "$INSTALL_VALIDATION_ROOT/BlitzRecorder.app"
+APP_PATH="$INSTALL_VALIDATION_ROOT/BlitzRecorder.app"
+BINARY_PATH="$APP_PATH/Contents/MacOS/BlitzRecorder"
+INFO_PLIST="$APP_PATH/Contents/Info.plist"
+
+[[ -x "$BINARY_PATH" ]] || { echo "error: app binary is not executable: $BINARY_PATH" >&2; exit 1; }
+[[ -f "$INFO_PLIST" ]] || { echo "error: Info.plist is missing: $INFO_PLIST" >&2; exit 1; }
 
 run_log "app-codesign-verify" codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 run_log "app-codesign-display" codesign -dvv "$APP_PATH"

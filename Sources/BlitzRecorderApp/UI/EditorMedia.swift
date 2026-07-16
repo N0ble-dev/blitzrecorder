@@ -141,6 +141,12 @@ private struct EditorLoadedMedia: Sendable {
     let waveform: [Float]
 }
 
+struct EditorFilmstripLoadRequest: Sendable {
+    let assetID: String
+    let url: URL
+    let frameCount: Int
+}
+
 @MainActor
 @Observable
 final class EditorMediaLibrary {
@@ -151,6 +157,7 @@ final class EditorMediaLibrary {
     private(set) var fileSizes: [String: String] = [:]
 
     @ObservationIgnored private var loadingIDs: Set<String> = []
+    @ObservationIgnored private var filmstripLoadingCounts: [String: Int] = [:]
 
     func loadAssets(_ assets: [EditorAsset]) async {
         let pending = assets.filter {
@@ -173,7 +180,7 @@ final class EditorMediaLibrary {
                 if let poster = loaded.poster {
                     posters[loaded.id] = poster
                 }
-                if !loaded.filmstrip.isEmpty {
+                if loaded.filmstrip.count > (filmstrips[loaded.id]?.count ?? 0) {
                     filmstrips[loaded.id] = loaded.filmstrip
                 }
                 if !loaded.waveform.isEmpty {
@@ -181,6 +188,26 @@ final class EditorMediaLibrary {
                 }
             }
         }
+    }
+
+    func loadFilmstrip(request: EditorFilmstripLoadRequest) async {
+        let loadedCount = filmstrips[request.assetID]?.count ?? 0
+        let loadingCount = filmstripLoadingCounts[request.assetID] ?? 0
+        guard request.frameCount > max(loadedCount, loadingCount) else { return }
+
+        filmstripLoadingCounts[request.assetID] = request.frameCount
+        defer {
+            if filmstripLoadingCounts[request.assetID] == request.frameCount {
+                filmstripLoadingCounts[request.assetID] = nil
+            }
+        }
+
+        let frames = await Self.loadFilmstripFrames(request: request)
+        guard !Task.isCancelled,
+              frames.count > (filmstrips[request.assetID]?.count ?? 0) else {
+            return
+        }
+        filmstrips[request.assetID] = frames
     }
 
     nonisolated private static func load(asset: EditorAsset) async -> EditorLoadedMedia? {
@@ -236,6 +263,41 @@ final class EditorMediaLibrary {
         )
     }
 
+    nonisolated private static func loadFilmstripFrames(
+        request: EditorFilmstripLoadRequest
+    ) async -> [CGImage] {
+        guard request.frameCount > 0 else { return [] }
+        let avAsset = AVURLAsset(url: request.url)
+        guard let duration = try? await avAsset.load(.duration) else { return [] }
+        let seconds = duration.seconds
+        guard seconds.isFinite, seconds > 0 else { return [] }
+
+        let generator = AVAssetImageGenerator(asset: avAsset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 0, height: 120)
+        let step = seconds / Double(request.frameCount)
+        let tolerance = min(0.5, max(1.0 / 120.0, step * 0.2))
+        generator.requestedTimeToleranceBefore = CMTime(seconds: tolerance, preferredTimescale: 600)
+        generator.requestedTimeToleranceAfter = CMTime(seconds: tolerance, preferredTimescale: 600)
+
+        let times = (0..<request.frameCount).map { index in
+            CMTime(
+                seconds: seconds * (Double(index) + 0.5) / Double(request.frameCount),
+                preferredTimescale: 600
+            )
+        }
+        var generated: [(time: Double, image: CGImage)] = []
+        for await result in generator.images(for: times) {
+            guard !Task.isCancelled else { return [] }
+            if case let .success(requestedTime, image, _) = result {
+                generated.append((time: requestedTime.seconds, image: image))
+            }
+        }
+        return generated
+            .sorted { $0.time < $1.time }
+            .map(\.image)
+    }
+
     nonisolated private static func waveform(for avAsset: AVURLAsset, duration: Double) async -> [Float] {
         guard duration > 0,
               let track = try? await avAsset.loadTracks(withMediaType: .audio).first else {
@@ -270,6 +332,10 @@ final class EditorMediaLibrary {
         let bucketCount = 240
         var buckets = [Float](repeating: 0, count: bucketCount)
         let totalFrames = max(1, Int(duration * sampleRate))
+        let frameStride = min(
+            max(1, Int(sampleRate / 100)),
+            max(1, totalFrames / (bucketCount * 12))
+        )
         var frameIndex = 0
 
         while reader.status == .reading, let sampleBuffer = output.copyNextSampleBuffer() {
@@ -294,7 +360,7 @@ final class EditorMediaLibrary {
             guard status == kCMBlockBufferNoErr else { continue }
 
             let bufferFrameCount = sampleCount / channelCount
-            for frame in 0..<bufferFrameCount {
+            for frame in stride(from: 0, to: bufferFrameCount, by: frameStride) {
                 var peak: Float = 0
                 for channel in 0..<channelCount {
                     let sample = abs(samples[frame * channelCount + channel])
@@ -302,12 +368,16 @@ final class EditorMediaLibrary {
                         peak = sample
                     }
                 }
-                let bucket = min(bucketCount - 1, max(0, frameIndex * bucketCount / totalFrames))
+                let absoluteFrameIndex = frameIndex + frame
+                let bucket = min(
+                    bucketCount - 1,
+                    max(0, absoluteFrameIndex * bucketCount / totalFrames)
+                )
                 if peak > buckets[bucket] {
                     buckets[bucket] = peak
                 }
-                frameIndex += 1
             }
+            frameIndex += bufferFrameCount
         }
 
         guard reader.status == .completed else { return [] }

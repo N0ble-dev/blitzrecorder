@@ -22,18 +22,26 @@ struct SceneRenderGeometry {
     }
 
     func visibleSourceRect(for kind: SceneLayerKind, sourceAspectRatio: CGFloat?) -> CGRect {
-        guard kind == .camera,
-              scene.cameraContentMode == .fit,
-              let sourceAspectRatio,
-              sourceAspectRatio > 0 else {
+        guard let sourceAspectRatio, sourceAspectRatio > 0 else {
             return targetRect(for: kind)
         }
-        return sourceFrame(
-            for: .camera,
-            sourceAspectRatio: sourceAspectRatio,
-            sourceCropAmount: .zero,
-            sourceCropPosition: .zero
-        )
+        switch kind {
+        case .screen:
+            guard videoPlacement(for: .screen).contentMode == .aspectFit else {
+                return targetRect(for: .screen)
+            }
+            return sourceFrame(for: .screen, sourceAspectRatio: sourceAspectRatio)
+        case .camera:
+            guard scene.cameraContentMode == .fit else {
+                return targetRect(for: .camera)
+            }
+            return sourceFrame(
+                for: .camera,
+                sourceAspectRatio: sourceAspectRatio,
+                sourceCropAmount: .zero,
+                sourceCropPosition: .zero
+            )
+        }
     }
 
     func normalizedFrame(for kind: SceneLayerKind) -> CGRect {

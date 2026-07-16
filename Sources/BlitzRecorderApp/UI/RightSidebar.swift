@@ -38,15 +38,23 @@ struct CameraCropControls: View {
         VStack(alignment: .leading, spacing: 8) {
             BlitzUI.sectionLabel("Camera image", icon: "camera")
 
+            CameraDiagramPicker(
+                options: CameraContentMode.allCases,
+                selection: contentModeSelection,
+                label: { $0.displayName },
+                draw: framingDraw
+            )
+            .help("Fill crops the camera edge to edge. Fit keeps the whole camera image.")
+
             CameraInspectorSliderRow(
-                title: "Zoom",
+                title: "Camera crop",
                 value: Binding(
                     get: { cropZoom },
                     set: { vm.setCameraCropZoom(CGFloat($0)) }
                 ),
                 range: 0...0.75
             )
-            .help("Zoom into the camera image")
+            .help("Crop into the camera image")
 
             cropActions
         }
@@ -342,6 +350,24 @@ private func shapeDraw(_ v: CameraInsetShape, _ c: inout GraphicsContext, _ s: C
         chip = CGRect(x: f.midX - w / 2, y: f.maxY - pad - h, width: w, height: h)
     }
     CamDiagram.fill(c, chip, 2, sel ? BlitzUI.mint : .white.opacity(0.42))
+}
+
+private func framingDraw(_ v: CameraContentMode, _ c: inout GraphicsContext, _ s: CGSize, _ sel: Bool) {
+    let frame = CamDiagram.canvasRect(s)
+    CamDiagram.fill(c, frame, 3, .white.opacity(0.05))
+    CamDiagram.stroke(c, frame, 3, .white.opacity(sel ? 0.4 : 0.2))
+
+    let color = sel ? BlitzUI.mint : .white.opacity(0.42)
+    let content: CGRect
+    switch v {
+    case .fill:
+        content = frame.insetBy(dx: 2, dy: 2)
+    case .fit:
+        let width = frame.width - 4
+        let height = width * 9 / 16
+        content = CGRect(x: frame.midX - width / 2, y: frame.midY - height / 2, width: width, height: height)
+    }
+    CamDiagram.fill(c, content, 2, color)
 }
 
 struct RemoteCameraOrientationControl: View {

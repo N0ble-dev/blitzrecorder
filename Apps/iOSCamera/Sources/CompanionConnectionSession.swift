@@ -264,6 +264,10 @@ final class CompanionConnectionSession {
         self.init(dependencies: .live(defaults: defaults))
     }
 
+    var hasTrustedMac: Bool {
+        trustedMacStore.trustedIdentity() != nil
+    }
+
     func start() {
         publish()
         startAdvertising()

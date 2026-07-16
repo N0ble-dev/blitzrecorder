@@ -139,7 +139,7 @@ final class TakeFinalizer {
         var synchronizedTake = take
         synchronizedTake.timelineTrimOffset = captureSummary.timelineTrimOffset
         synchronizedTake.sourceTimelineOffsets = captureSummary.sourceTimelineOffsets
-        let renamedTake = await renameFromTranscriptIfPossible(take: synchronizedTake, settings: finalizationSettings)
+        let renamedTake = synchronizedTake
         let processedTake = await removeCameraBackgroundIfNeeded(from: renamedTake, settings: finalizationSettings)
         let plan = TakeFinalizationPlan(
             take: processedTake,

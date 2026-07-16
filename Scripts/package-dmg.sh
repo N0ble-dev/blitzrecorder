@@ -21,6 +21,7 @@ if ! command -v create-dmg >/dev/null 2>&1; then
 fi
 
 SKIP_DMG=1 CONFIGURATION="$CONFIG" "$ROOT/Scripts/package-app.sh" >/dev/null
+codesign --verify --deep --strict --verbose=2 "$ROOT/build/BlitzRecorder.app" >/dev/null
 
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR" "$DIST_DIR"

@@ -37,6 +37,10 @@ final class ScreenPreviewer: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
             let dimensions = ScreenCaptureGeometry.previewDimensions(for: pickedFilter)
             configuration.width = dimensions.width
             configuration.height = dimensions.height
+            configuration.sourceRect = ScreenCaptureGeometry.pickedSourceRect(request: .init(
+                settings: settings,
+                filter: pickedFilter
+            ))
         } else {
             let content = try await SCShareableContent.current
             let source = try ScreenCaptureGeometry.screenSource(for: settings, content: content)

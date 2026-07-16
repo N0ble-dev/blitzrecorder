@@ -36,9 +36,12 @@ struct MainView: View {
 
     private func recorderContent(screenshotVariant: ScreenshotVariant) -> some View {
         VStack(spacing: 0) {
-            if vm.studioMode == .edit {
+            switch vm.studioMode {
+            case .edit:
                 EditorView(vm: vm)
-            } else {
+            case .projects:
+                ProjectLibraryView(vm: vm)
+            case .record:
                 CaptureCommandBar(vm: vm)
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
@@ -516,7 +519,7 @@ private struct CaptureCommandBar: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            WorkflowIndicator(vm: vm)
+            StudioSectionTabs(vm: vm)
                 .frame(maxWidth: .infinity)
 
             HStack(spacing: 10) {
@@ -610,23 +613,20 @@ private struct CaptureCommandBar: View {
 
 private struct CaptureSceneCarousel: View {
     @Bindable var vm: RecorderViewModel
-    @State private var showsAllRatios = false
-
-    private var displayedScenes: [RecordingSceneDefinition] {
-        showsAllRatios ? vm.allScenes : vm.currentScenes
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                workspaceHeader("Layouts", icon: "rectangle.stack")
+                workspaceHeader("Scenes", icon: "rectangle.stack")
                 Spacer(minLength: 0)
-                ratioFilter
+                Text("Switch during recording")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.38))
             }
 
             ScrollView(.horizontal) {
                 HStack(alignment: .top, spacing: 8) {
-                    ForEach(displayedScenes) { scene in
+                    ForEach(vm.currentScenes) { scene in
                         sceneButton(scene)
                     }
                     newSceneButton
@@ -652,26 +652,13 @@ private struct CaptureSceneCarousel: View {
     }
 
     private func sceneButton(_ scene: RecordingSceneDefinition) -> some View {
-        let isOffRatio = scene.layout != vm.settings.layout
-        let isSelected = !isOffRatio && vm.selectedSceneID == scene.id
-        let isInteractive = vm.canSwitchScene && !(isOffRatio && vm.state != .idle)
+        let isSelected = vm.selectedSceneID == scene.id
         return Button {
-            vm.selectSceneAcrossLayouts(scene.id)
+            vm.selectScene(scene.id)
         } label: {
             VStack(spacing: 6) {
                 SceneWorkspaceThumbnail(scene: scene)
                     .frame(width: 76, height: 56)
-                    .overlay(alignment: .topLeading) {
-                        if showsAllRatios {
-                            Text(scene.layout.shortLabel)
-                                .font(.system(size: 8.5, weight: .heavy))
-                                .foregroundStyle(.white.opacity(0.9))
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 2)
-                                .background(Capsule().fill(.black.opacity(0.55)))
-                                .offset(x: 3, y: 3)
-                        }
-                    }
                     .overlay(alignment: .topTrailing) {
                         if isSelected {
                             Image(systemName: "checkmark.circle.fill")
@@ -710,80 +697,24 @@ private struct CaptureSceneCarousel: View {
             radius: 4,
             y: 2
         )
-        .disabled(!isInteractive)
-        .opacity(isInteractive || isSelected ? 1 : 0.5)
+        .disabled(!vm.canSwitchScene)
+        .opacity(vm.canSwitchScene || isSelected ? 1 : 0.5)
         .pointingHandCursor()
-        .help(isOffRatio ? "Switch to \(scene.name) (\(scene.layout.shortLabel))" : "Switch to \(scene.name)")
+        .help("Switch to \(scene.name)")
         .contextMenu {
-            Button("Duplicate Layout") {
+            Button("Duplicate Scene") {
                 vm.selectScene(scene.id)
                 vm.duplicateSelectedScene()
             }
-            .disabled(!vm.canEditScene || isOffRatio)
+            .disabled(!vm.canEditScene)
 
             Divider()
 
             Button("Delete \(scene.name)", role: .destructive) {
                 vm.deleteScene(scene.id)
             }
-            .disabled(!vm.canEditScene || isOffRatio || vm.currentScenes.count <= 1)
+            .disabled(!vm.canEditScene || vm.currentScenes.count <= 1)
         }
-    }
-
-    private var ratioFilter: some View {
-        HStack(spacing: 2) {
-            ForEach(CaptureLayout.allCases, id: \.self) { layout in
-                filterSegment(
-                    label: layout.shortLabel,
-                    icon: layout.symbolName,
-                    isSelected: !showsAllRatios && vm.settings.layout == layout
-                ) {
-                    showsAllRatios = false
-                    if vm.settings.layout != layout {
-                        vm.setLayout(layout)
-                    }
-                }
-                .disabled(vm.state != .idle && vm.settings.layout != layout)
-            }
-
-            filterSegment(
-                label: "All",
-                icon: "square.grid.2x2",
-                isSelected: showsAllRatios
-            ) { showsAllRatios = true }
-        }
-        .padding(2)
-        .background(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(BlitzUI.quietFill)
-        )
-        .help("Filter scenes by aspect ratio")
-    }
-
-    private func filterSegment(
-        label: String,
-        icon: String,
-        isSelected: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 10, weight: .bold))
-                Text(label)
-                    .font(.system(size: 11, weight: .semibold))
-            }
-            .foregroundStyle(.white.opacity(isSelected ? 0.95 : 0.6))
-            .padding(.horizontal, 9)
-            .frame(height: 22)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(isSelected ? BlitzUI.selectedFill : Color.clear)
-        )
-        .pointingHandCursor()
     }
 
     private var newSceneButton: some View {
@@ -803,7 +734,7 @@ private struct CaptureSceneCarousel: View {
                 }
                 .frame(width: 64, height: 56)
 
-                Text("New layout")
+                Text("New scene")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.6))
                     .lineLimit(1)
@@ -819,7 +750,7 @@ private struct CaptureSceneCarousel: View {
         .disabled(!vm.canEditScene)
         .opacity(vm.canEditScene ? 1 : 0.5)
         .pointingHandCursor()
-        .help("Create a new layout")
+        .help("Create a new scene")
     }
 }
 
@@ -1010,27 +941,132 @@ private struct SceneEditorHeader: View {
     }
 }
 
+private enum RecorderInspectorTab: String, CaseIterable {
+    case scene = "Scene"
+    case source = "Source"
+    case canvas = "Canvas"
+
+    var systemImage: String {
+        switch self {
+        case .scene: return "rectangle.3.group"
+        case .source: return "slider.horizontal.3"
+        case .canvas: return "paintpalette"
+        }
+    }
+
+    static func preferred(for selection: RecorderInspectorSelection) -> RecorderInspectorTab {
+        switch selection {
+        case .scene: return .scene
+        case .source: return .source
+        case .canvas: return .canvas
+        }
+    }
+}
+
 private struct SceneWorkspaceInspector: View {
     @Bindable var vm: RecorderViewModel
+    @State private var selectedTab: RecorderInspectorTab = .source
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                contextHeader
+        VStack(spacing: 0) {
+            inspectorTabBar
 
-                if vm.isBackgroundLayerSelected {
-                    backgroundControls
-                } else {
-                    SelectedSourceInspector(vm: vm)
-                    sourceFramingControls
+            Divider()
+                .overlay(.white.opacity(0.08))
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    inspectorContent
                 }
+                .padding(14)
             }
-            .padding(14)
+            .scrollIndicators(.hidden)
+            .id(selectedTab)
         }
-        .scrollIndicators(.hidden)
         .frame(minWidth: 272, idealWidth: 304, maxWidth: 304)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(.regularMaterial)
+        .task {
+            selectedTab = RecorderInspectorTab.preferred(for: vm.inspectorSelection)
+        }
+        .onChange(of: vm.inspectorSelection) { _, selection in
+            selectedTab = RecorderInspectorTab.preferred(for: selection)
+        }
+    }
+
+    private var inspectorTabBar: some View {
+        HStack(spacing: 0) {
+            ForEach(RecorderInspectorTab.allCases, id: \.self) { tab in
+                Button {
+                    select(tab)
+                } label: {
+                    VStack(spacing: 7) {
+                        Label(tab.rawValue, systemImage: tab.systemImage)
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(
+                                selectedTab == tab
+                                    ? .white.opacity(0.94)
+                                    : .white.opacity(0.48)
+                            )
+                        Rectangle()
+                            .fill(selectedTab == tab ? BlitzUI.mint : Color.clear)
+                            .frame(height: 2)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 12)
+    }
+
+    @ViewBuilder
+    private var inspectorContent: some View {
+        switch selectedTab {
+        case .scene:
+            scenePanel
+        case .source:
+            if vm.selectedSource != nil {
+                contextHeader
+                SelectedSourceInspector(vm: vm)
+                sourceFramingControls
+            } else {
+                sourceEmptyState
+            }
+        case .canvas:
+            contextHeader
+            backgroundControls
+        }
+    }
+
+    private func select(_ tab: RecorderInspectorTab) {
+        selectedTab = tab
+        switch tab {
+        case .scene:
+            vm.selectSceneInspector()
+        case .source:
+            vm.selectPreferredSource()
+        case .canvas:
+            vm.selectBackgroundLayer()
+        }
+    }
+
+    private var sourceEmptyState: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("No source selected")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white.opacity(0.88))
+            Text("Select a source from the left sidebar or the canvas.")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.46))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(BlitzUI.quietFill, in: .rect(cornerRadius: 10))
     }
 
     private var scenePanel: some View {
@@ -1272,7 +1308,7 @@ private struct SceneWorkspaceInspector: View {
                 }
                 .blitzGlassButton()
                 .controlSize(.small)
-                .disabled(!vm.canEditScene)
+                .disabled(!vm.canAdjustScreenCapture)
                 .pointingHandCursor()
                 .help("Refresh available apps and windows")
             }
@@ -1334,7 +1370,7 @@ private struct SceneWorkspaceInspector: View {
     private var screenWindowZoomControl: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Text("Window zoom")
+                Text("Window fit")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.58))
                 Spacer(minLength: 0)
@@ -1345,38 +1381,26 @@ private struct SceneWorkspaceInspector: View {
             }
 
             HStack(spacing: 6) {
-                windowSizeStepButton(icon: "minus", isDisabled: vm.targetWindowZoom <= WindowZoomGeometry.minimumZoom) {
-                    vm.zoomTargetWindowFit(by: -0.05)
-                }
-                .help("Zoom out by using a larger source window")
-
                 Slider(
                     value: Binding(
                         get: { Double(vm.targetWindowZoom) },
                         set: { vm.setTargetWindowZoom(CGFloat($0)) }
                     ),
-                    in: WindowZoomGeometry.minimumZoom...WindowZoomGeometry.maximumZoom,
+                    in: ScreenSourceZoomGeometry.minimumZoom...ScreenSourceZoomGeometry.maximumZoom,
                     step: 0.05
                 )
                 .controlSize(.small)
                 .tint(BlitzUI.mint)
-                .disabled(!vm.canEditScene)
-                .help("Change the selected app's visual zoom in the canvas")
-
-                windowSizeStepButton(icon: "plus", isDisabled: vm.targetWindowZoom >= WindowZoomGeometry.maximumZoom) {
-                    vm.zoomTargetWindowFit(by: 0.05)
-                }
-                .help("Zoom in by using a narrower source window")
+                .disabled(!vm.canAdjustScreenCapture)
+                .help("Set how tightly the selected source fits its window")
 
                 windowSizeStepButton(icon: "arrow.counterclockwise", isDisabled: abs(vm.targetWindowZoom - 1) < 0.001) {
                     vm.resetTargetWindowZoom()
                 }
-                .help("Reset window zoom")
+                .help("Reset window fit")
             }
 
             HStack {
-                Text("50%")
-                Spacer(minLength: 0)
                 Text("100%")
                 Spacer(minLength: 0)
                 Text("150%")
@@ -1388,8 +1412,8 @@ private struct SceneWorkspaceInspector: View {
             workspaceAction("Resize window", icon: "rectangle.arrowtriangle.2.inward") {
                 vm.fitCurrentScreenWindowToSlot()
             }
-            .disabled(!vm.canEditScene)
-            .help("Apply the current window zoom to the selected app or window")
+            .disabled(!vm.canAdjustScreenCapture)
+            .help("Resize the selected app or window to the current fit")
 
             appContentZoomControl
         }
@@ -1397,7 +1421,7 @@ private struct SceneWorkspaceInspector: View {
 
     private var appContentZoomControl: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("App text zoom")
+            Text("App content size")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.58))
 
@@ -1508,7 +1532,7 @@ private struct SceneWorkspaceInspector: View {
             ],
             actions: actions,
             layout: .thumbnails,
-            enabled: vm.canEditScene
+            enabled: vm.canAdjustScreenCapture
         )
     }
 
@@ -1555,7 +1579,7 @@ private struct SceneWorkspaceInspector: View {
                 .foregroundStyle(.white.opacity(request.isSelected ? 0.94 : 0.62))
         }
         .buttonStyle(.plain)
-        .disabled(!vm.canEditScene)
+        .disabled(!vm.canAdjustScreenCapture)
         .background(.white.opacity(request.isSelected ? 0.16 : 0.045), in: .rect(cornerRadius: 8))
         .pointingHandCursor()
     }

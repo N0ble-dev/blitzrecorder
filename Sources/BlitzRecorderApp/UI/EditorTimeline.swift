@@ -8,6 +8,8 @@ struct EditorTimelineView: View {
     let project: RecordingProject?
     let assets: [EditorAsset]
     let library: EditorMediaLibrary
+    let draftScene: RecordingScene?
+    let draftSceneEventIndex: Int?
     let duration: Double
     let playbackTime: Double
     let liveTime: () -> Double
@@ -29,7 +31,7 @@ struct EditorTimelineView: View {
     private let gutterWidth: CGFloat = 128
     private let rulerHeight: CGFloat = 26
     private let chaptersRowHeight: CGFloat = 32
-    private let segmentsRowHeight: CGFloat = 34
+    private let segmentsRowHeight: CGFloat = 42
     private let videoRowHeight: CGFloat = 48
     private let audioRowHeight: CGFloat = 36
 
@@ -61,14 +63,14 @@ struct EditorTimelineView: View {
     private var header: some View {
         HStack(spacing: 8) {
             TimelineActionButton(
-                title: "Add layout",
-                systemName: "plus",
+                title: "Split scene",
+                systemName: "scissors",
                 isDisabled: !isInteractive,
                 action: onSplit
             )
 
             TimelineActionButton(
-                title: "Remove",
+                title: "Delete scene change",
                 systemName: "trash",
                 isDisabled: !canDeleteCut,
                 action: onDeleteCut
@@ -329,7 +331,7 @@ struct EditorTimelineView: View {
                 let gap: CGFloat = index + 1 < events.count ? 2 : 0
                 let width = max(14, CGFloat(end - start) * pxPerSecond - gap)
 
-                segmentClip(index: index)
+                segmentClip(index: index, start: start)
                     .frame(width: width, height: segmentsRowHeight)
                     .offset(x: CGFloat(start) * pxPerSecond)
             }
@@ -341,45 +343,62 @@ struct EditorTimelineView: View {
         )
     }
 
-    private func segmentClip(index: Int) -> some View {
+    private func segmentClip(index: Int, start: Double) -> some View {
+        let savedScene = RecordingScene(snapshot: sceneEvents[index].scene)
+            ?? RecordingScene(settings: RecordingSettings())
+        let scene = EditorSceneTimelineSceneResolver.scene(request: .init(
+            savedScene: savedScene,
+            eventIndex: index,
+            draftScene: draftScene,
+            draftEventIndex: draftSceneEventIndex
+        ))
         let isSelected = selection == .segment(index)
-        let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
-
-        return shape
-            .fill(layoutSegmentFill)
-            .overlay {
-                if isSelected {
-                    shape.strokeBorder(BlitzUI.mint, lineWidth: 2)
-                }
-            }
-            .overlay(alignment: .leading) {
-                Text(mixTitle(for: index))
-                    .font(.system(size: 9, weight: .heavy))
-                    .foregroundStyle(isSelected ? BlitzUI.mint : .white)
-                    .lineLimit(1)
-                    .padding(.horizontal, 7)
-            }
-            .contentShape(shape)
-            .modifier(TimelineClipHover(cornerRadius: 5))
-            .onTapGesture { selection = .segment(index) }
+        let isActive = activeSegmentIndex == index
+        return EditorSceneTimelineItem(
+            scene: scene,
+            canvasAspectRatio: captureLayout.aspectRatio,
+            isSelected: isSelected,
+            isActive: isActive
+        )
+        .contentShape(.rect(cornerRadius: 6))
+        .modifier(TimelineClipHover(cornerRadius: 6))
+        .onTapGesture {
+            selection = .segment(index)
+            onSeek(min(duration, start + 0.001))
+            onSeekEnded()
+        }
     }
 
-    private func mixTitle(for index: Int) -> String {
-        guard sceneEvents.indices.contains(index) else { return "Layout" }
-        return EditorSceneTitle.title(for: sceneEvents[index].scene)
+    private var activeSegmentIndex: Int? {
+        EditorSceneTimelineActiveIndexResolver.index(request: .init(
+            eventTimes: sceneEvents.map(\.time),
+            playbackTime: playbackTime
+        ))
+    }
+
+    private var captureLayout: CaptureLayout {
+        guard let rawLayout = project?.settings.layout else { return .horizontal }
+        return CaptureLayout(rawValue: rawLayout) ?? .horizontal
     }
 
     private func assetTrack(_ asset: EditorAsset, pxPerSecond: CGFloat, contentWidth: CGFloat) -> some View {
         let rowHeight: CGFloat = asset.isVideo ? videoRowHeight : audioRowHeight
         let clipSeconds = library.durations[asset.id] ?? duration
         let width = max(14, CGFloat(clipSeconds) * pxPerSecond)
+        let frames = library.filmstrips[asset.id] ?? []
+        let requestedFrameCount = EditorFilmstripLayout.requestedFrameCount(width: width)
+        let filmstripTaskID = EditorFilmstripTaskID(
+            assetID: asset.id,
+            requestedFrameCount: requestedFrameCount,
+            availableFrameCount: frames.count
+        )
         let isSelected = selection == .asset(asset.id)
         let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
 
         return ZStack {
             shape.fill(asset.tint.opacity(0.18))
             if asset.isVideo {
-                filmstrip(frames: library.filmstrips[asset.id] ?? [])
+                EditorFilmstrip(frames: frames, width: width)
             } else {
                 waveform(values: library.waveforms[asset.id] ?? [], tint: asset.tint)
             }
@@ -401,18 +420,40 @@ struct EditorTimelineView: View {
             Rectangle()
                 .fill(Color.white.opacity(0.025))
         )
+        .task(id: filmstripTaskID) {
+            guard asset.isVideo, frames.count < requestedFrameCount else { return }
+            await library.loadFilmstrip(request: EditorFilmstripLoadRequest(
+                assetID: asset.id,
+                url: asset.url,
+                frameCount: requestedFrameCount
+            ))
+        }
     }
 
-    private func filmstrip(frames: [CGImage]) -> some View {
-        GeometryReader { proxy in
-            let cellWidth = proxy.size.width / CGFloat(max(frames.count, 1))
-            HStack(spacing: 0) {
-                ForEach(frames.indices, id: \.self) { index in
-                    Image(decorative: frames[index], scale: 1)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: cellWidth, height: proxy.size.height)
-                        .clipped()
+    private struct EditorFilmstripTaskID: Hashable {
+        let assetID: String
+        let requestedFrameCount: Int
+        let availableFrameCount: Int
+    }
+
+    private struct EditorFilmstrip: View {
+        let frames: [CGImage]
+        let width: CGFloat
+
+        var body: some View {
+            GeometryReader { proxy in
+                let layout = EditorFilmstripLayout.make(request: .init(
+                    width: width,
+                    availableFrameCount: frames.count
+                ))
+                HStack(spacing: 0) {
+                    ForEach(Array(layout.frameIndices.enumerated()), id: \.offset) { _, frameIndex in
+                        Image(decorative: frames[frameIndex], scale: 1)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: layout.cellWidth, height: proxy.size.height)
+                            .clipped()
+                    }
                 }
             }
         }
@@ -535,7 +576,7 @@ struct EditorTimelineView: View {
             rows.append((icon: "text.quote", title: "Chapters", height: chaptersRowHeight, asset: nil))
         }
         if showsSegmentsTrack {
-            rows.append((icon: "rectangle.3.group", title: "Layouts", height: segmentsRowHeight, asset: nil))
+            rows.append((icon: "rectangle.3.group", title: "Scenes", height: segmentsRowHeight, asset: nil))
         }
         for asset in trackAssets {
             rows.append((
@@ -576,6 +617,124 @@ struct EditorTimelineView: View {
     private func formatTime(_ seconds: Double) -> String {
         let total = max(0, Int(seconds.rounded()))
         return String(format: "%02d:%02d", total / 60, total % 60)
+    }
+}
+
+private struct EditorSceneTimelineItem: View {
+    let scene: RecordingScene
+    let canvasAspectRatio: CGFloat
+    let isSelected: Bool
+    let isActive: Bool
+
+    private let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
+
+    var body: some View {
+        GeometryReader { proxy in
+            let presentation = EditorSceneTimelineItemPresentation.make(scene: scene)
+            HStack(spacing: 6) {
+                EditorSceneTimelineThumbnail(scene: scene, canvasAspectRatio: canvasAspectRatio)
+                    .frame(width: thumbnailWidth(for: proxy.size.width), height: 34)
+
+                if proxy.size.width >= 86 {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(presentation.title)
+                            .font(.system(size: 8.5, weight: .heavy))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .lineLimit(1)
+
+                        if let detail = presentation.detail {
+                            Text(detail)
+                                .font(.system(size: 7.5, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.52))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(4)
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
+        }
+        .background(shape.fill(layoutSegmentFill.opacity(isActive ? 1 : 0.78)))
+        .overlay {
+            shape.strokeBorder(
+                isSelected ? BlitzUI.mint : Color.white.opacity(isActive ? 0.22 : 0.08),
+                lineWidth: isSelected ? 2 : 1
+            )
+            .allowsHitTesting(false)
+        }
+        .clipShape(shape)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(EditorSceneTimelineItemPresentation.make(scene: scene).title)
+    }
+
+    private func thumbnailWidth(for itemWidth: CGFloat) -> CGFloat {
+        if itemWidth >= 86 {
+            return min(52, max(24, itemWidth * 0.36))
+        }
+        return max(6, itemWidth - 8)
+    }
+}
+
+private struct EditorSceneTimelineThumbnail: View {
+    let scene: RecordingScene
+    let canvasAspectRatio: CGFloat
+
+    var body: some View {
+        GeometryReader { proxy in
+            let canvas = fittedCanvas(in: proxy.size)
+            let geometry = SceneRenderGeometry(canvas: canvas, scene: scene, origin: .upperLeft)
+
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(Color(cgColor: scene.canvasBackgroundStyle.appearance.solidCGColor))
+                    .frame(width: canvas.width, height: canvas.height)
+                    .offset(x: canvas.minX, y: canvas.minY)
+
+                ForEach(geometry.activePlacements, id: \.kind) { placement in
+                    sourceLayer(placement)
+                }
+
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                    .frame(width: canvas.width, height: canvas.height)
+                    .offset(x: canvas.minX, y: canvas.minY)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+        }
+    }
+
+    private func sourceLayer(_ placement: SceneRenderLayerPlacement) -> some View {
+        let shape = RoundedRectangle(cornerRadius: placement.cornerRadius, style: .continuous)
+        let isScreen = placement.kind == .screen
+        let shadowEnabled = isScreen ? scene.screenShadowEnabled : scene.cameraShadowEnabled
+        return shape
+            .fill(isScreen ? Color.white.opacity(0.82) : BlitzUI.mint.opacity(0.92))
+            .overlay {
+                shape.strokeBorder(Color.black.opacity(isScreen ? 0.18 : 0.24), lineWidth: 0.5)
+            }
+            .shadow(color: shadowEnabled ? .black.opacity(0.55) : .clear, radius: 1.5, y: 1)
+            .frame(width: placement.targetRect.width, height: placement.targetRect.height)
+            .offset(x: placement.targetRect.minX, y: placement.targetRect.minY)
+    }
+
+    private func fittedCanvas(in size: CGSize) -> CGRect {
+        let available = CGSize(width: max(1, size.width), height: max(1, size.height))
+        let ratio = max(0.01, canvasAspectRatio)
+        let availableRatio = available.width / available.height
+        let canvasSize: CGSize
+        if availableRatio > ratio {
+            canvasSize = CGSize(width: available.height * ratio, height: available.height)
+        } else {
+            canvasSize = CGSize(width: available.width, height: available.width / ratio)
+        }
+        return CGRect(
+            x: (available.width - canvasSize.width) / 2,
+            y: (available.height - canvasSize.height) / 2,
+            width: canvasSize.width,
+            height: canvasSize.height
+        )
     }
 }
 

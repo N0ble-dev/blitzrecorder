@@ -6,6 +6,15 @@ This project uses GitHub Releases for downloadable macOS builds. Release tags us
 
 ## Unreleased
 
+## 0.4.0 - 2026-07-16
+
+- Added a Projects library with playback, multi-selection, rename, delete, Finder access, and export workflows.
+- Added optional on-device transcription with speaker timelines, searchable transcripts, editable speaker details, and generated project titles.
+- Expanded the editor with a visual filmstrip, clearer scene changes, source crop and zoom controls, canvas padding, screen corners, and shadows.
+- Added export controls for format, resolution, quality, bitrate estimates, and destination placement.
+- Improved recording settings, screen-source zoom, permission recovery, microphone startup, audio finalization, and capture error reporting.
+- Refined iPhone companion pairing state and recording-library cleanup controls.
+
 ## 0.3.0 - 2026-07-15
 
 - Redesigned the recording studio and editor around a shared native control system.

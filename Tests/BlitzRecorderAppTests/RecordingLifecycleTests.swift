@@ -126,6 +126,27 @@ final class RecordingLifecycleTests: XCTestCase {
         XCTAssertEqual(history.entries.first?.projectPath, take.projectURL.path)
     }
 
+    func testTakeFileStoreDeletesProjectAndHistoryButKeepsExportedVideo() throws {
+        var settings = RecordingSettings()
+        settings.outputDirectory = temporaryDirectory()
+
+        let store = TakeFileStore()
+        let take = try store.createTake(settings: settings)
+        let exportURL = settings.outputDirectory.appendingPathComponent("finished.mov")
+        try Data("export".utf8).write(to: exportURL)
+        let project = try XCTUnwrap(store.loadProjectHistory(settings: settings).entries.first)
+
+        try store.deleteProject(RecordingProjectDeletionRequest(
+            project: project,
+            settings: settings,
+            disposition: .permanent
+        ))
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: take.scratchDirectory.path))
+        XCTAssertTrue(store.loadProjectHistory(settings: settings).entries.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: exportURL.path))
+    }
+
     func testRecordingProjectPersistsChaptersAndEditorTimeline() throws {
         var settings = RecordingSettings()
         settings.outputDirectory = temporaryDirectory()
@@ -514,26 +535,40 @@ final class RecordingLifecycleTests: XCTestCase {
         let controller = EditorPlaybackController()
         await controller.load(project: initialProject, baseSettings: settings)
         let initialPlayer = try XCTUnwrap(controller.videoPlayer(for: .screen))
-        let initialX = try XCTUnwrap(controller.scene(at: 0)?.sceneLayout.screenFrame.minX)
+        let initialPreviewRevision = controller.previewSceneRevision
+        var livePreviewScene = try XCTUnwrap(controller.scene(at: 0))
+        livePreviewScene.canvasPadding = 0.1
+        livePreviewScene.screenCornerRadius = 0.12
+        livePreviewScene.screenShadowEnabled = true
+        controller.setPreviewSceneOverride(livePreviewScene, at: 0)
 
-        let updatedProject = try store.updateProjectScene(
+        XCTAssertGreaterThan(controller.previewSceneRevision, initialPreviewRevision)
+        XCTAssertEqual(controller.scene(at: 0)?.canvasPadding, 0.1)
+        XCTAssertEqual(controller.scene(at: 0)?.screenCornerRadius, 0.12)
+        XCTAssertEqual(controller.scene(at: 0)?.screenShadowEnabled, true)
+
+        let canvasProject = try store.updateProjectScene(
             at: take.projectURL,
             eventIndex: 0,
             baseSettings: settings
         ) { scene in
-            scene.sceneLayout.screenFrame.origin.x = 0.25
+            scene.canvasPadding = livePreviewScene.canvasPadding
+            scene.screenCornerRadius = livePreviewScene.screenCornerRadius
+            scene.screenShadowEnabled = livePreviewScene.screenShadowEnabled
         }
-        let refreshed = controller.refreshSceneTimeline(EditorPlaybackSceneTimelineUpdate(
-            project: updatedProject,
-            baseSettings: settings
+        let canvasRefreshed = controller.refreshSceneTimeline(EditorPlaybackSceneTimelineUpdate(
+            project: canvasProject,
+            baseSettings: settings,
+            preservesPreviewSceneOverride: true
         ))
-        let updatedPlayer = try XCTUnwrap(controller.videoPlayer(for: .screen))
-        let updatedX = try XCTUnwrap(controller.scene(at: 0)?.sceneLayout.screenFrame.minX)
 
-        XCTAssertTrue(refreshed)
+        XCTAssertTrue(canvasRefreshed)
+        XCTAssertTrue(initialPlayer === controller.videoPlayer(for: .screen))
+        XCTAssertEqual(controller.scene(at: 0)?.canvasPadding, 0.1)
+        XCTAssertEqual(controller.scene(at: 0)?.screenCornerRadius, 0.12)
+        XCTAssertEqual(controller.scene(at: 0)?.screenShadowEnabled, true)
+
         XCTAssertTrue(controller.isReady)
-        XCTAssertTrue(initialPlayer === updatedPlayer)
-        XCTAssertNotEqual(initialX, updatedX, accuracy: 0.0001)
         controller.teardown()
     }
 
@@ -1541,6 +1576,34 @@ final class RecordingLifecycleTests: XCTestCase {
         XCTAssertEqual(audioDescription.mSampleRate, 44_100, accuracy: 1)
     }
 
+    func testAudioSampleFileWriterSurvivesMicrophoneTimestampReset() async throws {
+        let directory = temporaryDirectory()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("audio.m4a")
+        let writer = try AudioSampleFileWriter(url: url)
+
+        for packet in 0..<12 {
+            writer.append(try makeSilentAudioSampleBuffer(
+                presentationTime: CMTime(value: CMTimeValue(packet * 480), timescale: 48_000),
+                frames: 480
+            ))
+        }
+        for packet in 0..<12 {
+            writer.append(try makeSilentAudioSampleBuffer(
+                presentationTime: CMTime(value: CMTimeValue(packet * 480), timescale: 48_000),
+                frames: 480
+            ))
+        }
+
+        let completion = try await writer.finish()
+        let asset = AVURLAsset(url: url)
+        let duration = try await asset.load(.duration)
+
+        XCTAssertTrue(completion.wroteMedia)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertGreaterThan(duration.seconds, 0.2)
+    }
+
     func testMergerExportsWithTransparentCameraIntermediate() async throws {
         var settings = RecordingSettings()
         settings.outputDirectory = temporaryDirectory()
@@ -1858,7 +1921,6 @@ final class RecordingLifecycleTests: XCTestCase {
             ],
             at: CMTime(seconds: 0.1, preferredTimescale: 600)
         )
-
         let paddedEdge = sampledColors[0]
         let screenCenter = sampledColors[1]
         XCTAssertGreaterThan(paddedEdge.green + paddedEdge.blue, 40)
@@ -1924,7 +1986,6 @@ final class RecordingLifecycleTests: XCTestCase {
             ],
             at: CMTime(seconds: 0.1, preferredTimescale: 600)
         )
-
         let insideRightEdge = sampledColors[2]
         let outsidePadding = sampledColors[3]
         XCTAssertGreaterThan(insideRightEdge.red, 140, "insideRightEdge=\(insideRightEdge)")
@@ -2002,7 +2063,7 @@ final class RecordingLifecycleTests: XCTestCase {
         XCTAssertEqual(sampledColor.green, expectedColor.green, accuracy: 18)
     }
 
-    func testMergerRoundsPaddedSourceCornersInFinalExport() async throws {
+    func testMergerKeepsPaddedSourceCornersSquareInFinalExport() async throws {
         var settings = RecordingSettings()
         settings.outputDirectory = temporaryDirectory()
         settings.enabledSources = [.screen]
@@ -2023,21 +2084,76 @@ final class RecordingLifecycleTests: XCTestCase {
 
         let outputURL = try await Merger.exportFinalVideo(take: take, settings: settings)
         let dimensions = settings.outputResolution.dimensions(for: settings.layout)
-        let inset = CGFloat(min(dimensions.width, dimensions.height)) * settings.canvasPadding
+        let geometry = SceneRenderGeometry(
+            canvas: CGRect(
+                origin: .zero,
+                size: CGSize(width: dimensions.width, height: dimensions.height)
+            ),
+            scene: RecordingScene(settings: settings),
+            origin: .upperLeft
+        )
+        let sourceRect = geometry.sourceFrame(for: .screen, sourceAspectRatio: 1)
         let sampledColors = try await samplePixelColors(
             in: outputURL,
             normalizedPoints: [
-                CGPoint(x: (inset + 3) / CGFloat(dimensions.width), y: (inset + 3) / CGFloat(dimensions.height)),
+                CGPoint(
+                    x: (sourceRect.minX + 20) / CGFloat(dimensions.width),
+                    y: (sourceRect.minY + 20) / CGFloat(dimensions.height)
+                ),
                 CGPoint(x: 0.5, y: 0.5)
             ],
             at: CMTime(seconds: 0.1, preferredTimescale: 600)
         )
 
-        let roundedCorner = sampledColors[0]
+        let squareCorner = sampledColors[0]
         let screenCenter = sampledColors[1]
-        XCTAssertLessThan(roundedCorner.red, 140)
-        XCTAssertGreaterThan(roundedCorner.green + roundedCorner.blue, 120)
+        XCTAssertGreaterThan(squareCorner.red, 140)
+        XCTAssertLessThan(squareCorner.green + squareCorner.blue, 120)
         XCTAssertGreaterThan(screenCenter.red, 140)
+    }
+
+    func testMergerRendersScreenShadowIndependentlyFromPadding() async throws {
+        var settings = RecordingSettings()
+        settings.outputDirectory = temporaryDirectory()
+        settings.enabledSources = [.screen]
+        settings.canvasPadding = 0.12
+        settings.canvasBackgroundStyle = .studioPaperWhite
+        settings.screenShadowEnabled = true
+        settings.framesPerSecond = 30
+        settings.outputResolution = .p720
+
+        let store = TakeFileStore()
+        let take = try store.createTake(settings: settings)
+        try FileManager.default.createDirectory(at: take.scratchDirectory, withIntermediateDirectories: true)
+        try writeTestMovie(
+            url: take.screenURL,
+            codec: .h264,
+            color: (blue: 0, green: 0, red: 0, alpha: 255)
+        )
+
+        let outputURL = try await Merger.exportFinalVideo(take: take, settings: settings)
+        let dimensions = settings.outputResolution.dimensions(for: settings.layout)
+        let renderSize = CGSize(width: dimensions.width, height: dimensions.height)
+        let geometry = SceneRenderGeometry(
+            canvas: CGRect(origin: .zero, size: renderSize),
+            scene: RecordingScene(settings: settings),
+            origin: .upperLeft
+        )
+        let sourceRect = geometry.visibleSourceRect(for: .screen, sourceAspectRatio: 1)
+        let sampledColors = try await samplePixelColors(
+            in: outputURL,
+            normalizedPoints: [
+                CGPoint(x: (sourceRect.maxX + 8) / renderSize.width, y: sourceRect.midY / renderSize.height),
+                CGPoint(x: 0.95, y: sourceRect.midY / renderSize.height)
+            ],
+            at: CMTime(seconds: 0.1, preferredTimescale: 600)
+        )
+
+        let shadowEdge = sampledColors[0]
+        let clearBackground = sampledColors[1]
+        XCTAssertLessThan(shadowEdge.red, clearBackground.red)
+        XCTAssertLessThan(shadowEdge.green, clearBackground.green)
+        XCTAssertLessThan(shadowEdge.blue, clearBackground.blue)
     }
 
     func testMergerRendersCameraShadowOverScreenInFinalExport() async throws {

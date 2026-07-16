@@ -26,10 +26,15 @@ struct EditorView: View {
     @State private var selection: EditorSelection?
     @State private var selectedFormat: OutputVideoFormat = .mov
     @State private var selectedResolution: OutputResolution = .p1080
+    @State private var selectedExportQuality: ExportVideoQuality = .high
+    @State private var isExportPopoverPresented = false
     @State private var reloadTask: Task<Void, Never>?
     @State private var sceneEvents: [RecordingSceneEvent] = []
     @State private var layoutDraft: EditorLayoutDraft?
     @State private var screenZoomDraft: Double?
+    @State private var canvasSceneDraft: RecordingScene?
+    @State private var canvasCommitTask: Task<Void, Never>?
+    @State private var preservesCanvasPreviewOnNextProjectRefresh = false
     @State private var editErrorMessage: String?
     @State private var inspectorTab: EditorInspectorTab = .layout
     @State private var aspectRatioLockedKinds: Set<SceneLayerKind> = [.screen, .camera]
@@ -66,6 +71,8 @@ struct EditorView: View {
                 project: vm.lastExportedProject,
                 assets: assets,
                 library: library,
+                draftScene: layoutDraft?.scene ?? canvasSceneDraft,
+                draftSceneEventIndex: layoutDraft?.eventIndex ?? (canvasSceneDraft == nil ? nil : currentEventIndex),
                 duration: timelineDuration,
                 playbackTime: playback.currentTime,
                 liveTime: { playback.displayTime() },
@@ -95,20 +102,38 @@ struct EditorView: View {
         }
         .onChange(of: vm.lastExportedProject) {
             reloadTask?.cancel()
+            let preservesPreviewSceneOverride = preservesCanvasPreviewOnNextProjectRefresh
+            preservesCanvasPreviewOnNextProjectRefresh = false
             let task = Task {
-                await refreshProject()
+                await refreshProject(preservesPreviewSceneOverride: preservesPreviewSceneOverride)
                 guard !Task.isCancelled else { return }
                 try? await Task.sleep(for: .milliseconds(90))
                 guard !Task.isCancelled else { return }
                 layoutDraft = nil
                 screenZoomDraft = nil
+                canvasSceneDraft = nil
             }
             reloadTask = task
         }
         .onDisappear {
             reloadTask?.cancel()
             reloadTask = nil
+            canvasCommitTask?.cancel()
+            canvasCommitTask = nil
             playback.teardown()
+        }
+        .onChange(of: selection) { _, selection in
+            switch selection {
+            case .segment:
+                inspectorTab = .layout
+            case .asset(let id):
+                let kind = assets.first(where: { $0.id == id })?.kind
+                inspectorTab = kind == .microphone || kind == .systemAudio
+                    ? .audio
+                    : .layout
+            case nil:
+                inspectorTab = .layout
+            }
         }
         .overlay {
             EditorKeyboardShortcutView { event in
@@ -140,7 +165,7 @@ struct EditorView: View {
         await media
     }
 
-    private func refreshProject() async {
+    private func refreshProject(preservesPreviewSceneOverride: Bool) async {
         guard !Task.isCancelled else { return }
         guard let project = vm.lastExportedProject else {
             await reloadProject()
@@ -157,7 +182,8 @@ struct EditorView: View {
 
         let refreshed = playback.refreshSceneTimeline(EditorPlaybackSceneTimelineUpdate(
             project: project,
-            baseSettings: vm.settings
+            baseSettings: vm.settings,
+            preservesPreviewSceneOverride: preservesPreviewSceneOverride
         ))
         if !refreshed {
             await reloadProject()
@@ -280,9 +306,9 @@ struct EditorView: View {
     private var toolbar: some View {
         HStack(spacing: 12) {
             Button {
-                vm.closeEditor()
+                vm.showProjects()
             } label: {
-                Label("Record", systemImage: "chevron.left")
+                Label("Projects", systemImage: "chevron.left")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.62))
                     .padding(.horizontal, 10)
@@ -291,7 +317,7 @@ struct EditorView: View {
             }
             .buttonStyle(.plain)
             .pointingHandCursor()
-            .help("Return to recording setup")
+            .help("Return to projects")
 
             Rectangle()
                 .fill(Color.white.opacity(0.08))
@@ -331,12 +357,7 @@ struct EditorView: View {
 
     private var exportButton: some View {
         Button {
-            vm.exportLastProject(
-                as: selectedFormat,
-                resolution: selectedResolution,
-                hiddenVideoSources: playback.hiddenKinds,
-                mutedAudioSources: playback.mutedSources
-            )
+            isExportPopoverPresented.toggle()
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: vm.state == .finishing ? "hourglass" : "square.and.arrow.up")
@@ -346,14 +367,207 @@ struct EditorView: View {
             }
             .foregroundStyle(.black.opacity(0.84))
             .padding(.horizontal, 18)
-            .frame(height: 36)
+            .frame(height: 40)
         }
         .buttonStyle(.plain)
         .background(BlitzUI.mint, in: .rect(cornerRadius: 9))
         .pointingHandCursor()
         .disabled(project == nil || vm.state != .idle)
         .opacity(project == nil ? 0.45 : 1)
-        .help("Export this edit as \(selectedFormat.displayName)")
+        .help("Choose export settings")
+        .popover(isPresented: $isExportPopoverPresented, arrowEdge: .top) {
+            exportPopover
+        }
+    }
+
+    private var exportPopover: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                Image(systemName: "square.and.arrow.up.fill")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(BlitzUI.mint)
+                    .frame(width: 36, height: 36)
+                    .background(BlitzUI.mint.opacity(0.13), in: .rect(cornerRadius: 9))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Export video")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.95))
+                    Text("Choose the finished file settings.")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.52))
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                exportSectionLabel("FORMAT")
+                HStack(spacing: 6) {
+                    ForEach(OutputVideoFormat.allCases, id: \.rawValue) { format in
+                        exportFormatButton(format)
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                exportSectionLabel("RESOLUTION")
+                HStack(spacing: 6) {
+                    ForEach(OutputResolution.allCases, id: \.rawValue) { resolution in
+                        exportResolutionButton(resolution)
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                exportSectionLabel("QUALITY")
+                HStack(spacing: 6) {
+                    ForEach(ExportVideoQuality.allCases, id: \.rawValue) { quality in
+                        exportQualityButton(quality)
+                    }
+                }
+
+                Text(selectedExportQuality.plainDescription)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.46))
+            }
+
+            HStack(spacing: 8) {
+                Image(systemName: "info.circle.fill")
+                    .foregroundStyle(BlitzUI.mint.opacity(0.82))
+                Text(exportSummary)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.62))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+            .background(Color.white.opacity(0.045), in: .rect(cornerRadius: 8))
+
+            Button {
+                exportVideo()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "square.and.arrow.up.fill")
+                    Text("Export video")
+                }
+                .font(.system(size: 12.5, weight: .bold))
+                .foregroundStyle(.black.opacity(0.84))
+                .frame(maxWidth: .infinity, minHeight: 42)
+                .background(BlitzUI.mint, in: .rect(cornerRadius: 9))
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help("Save to \(vm.settings.outputDirectory.path)")
+        }
+        .padding(18)
+        .frame(width: 390)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .preferredColorScheme(.dark)
+    }
+
+    private func exportSectionLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 9.5, weight: .heavy))
+            .tracking(0.7)
+            .foregroundStyle(.white.opacity(0.42))
+    }
+
+    private func exportFormatButton(_ format: OutputVideoFormat) -> some View {
+        let selected = format == selectedFormat
+        return Button {
+            selectedFormat = format
+        } label: {
+            Text(format.displayName)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(selected ? Color.black.opacity(0.84) : Color.white.opacity(0.66))
+                .frame(maxWidth: .infinity, minHeight: 36)
+                .background(
+                    selected ? BlitzUI.mint : Color.white.opacity(0.055),
+                    in: .rect(cornerRadius: 7)
+                )
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+    }
+
+    private func exportResolutionButton(_ resolution: OutputResolution) -> some View {
+        let selected = resolution == selectedResolution
+        let locked = resolution == .p2160 && !vm.accessController.canUse4KExport
+        return Button {
+            guard !locked else {
+                _ = vm.accessController.requirePaidFeature("4K export")
+                return
+            }
+            selectedResolution = resolution
+        } label: {
+            HStack(spacing: 4) {
+                if locked {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 8, weight: .bold))
+                }
+                Text(resolution.displayName)
+                    .font(.system(size: 11, weight: .bold))
+            }
+            .foregroundStyle(selected ? Color.black.opacity(0.84) : Color.white.opacity(0.66))
+            .frame(maxWidth: .infinity, minHeight: 36)
+            .background(
+                selected ? BlitzUI.mint : Color.white.opacity(0.055),
+                in: .rect(cornerRadius: 7)
+            )
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+    }
+
+    private func exportQualityButton(_ quality: ExportVideoQuality) -> some View {
+        let selected = quality == selectedExportQuality
+        return Button {
+            selectedExportQuality = quality
+        } label: {
+            Text(quality.displayName)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(selected ? Color.black.opacity(0.84) : Color.white.opacity(0.66))
+                .frame(maxWidth: .infinity, minHeight: 36)
+                .background(
+                    selected ? BlitzUI.mint : Color.white.opacity(0.055),
+                    in: .rect(cornerRadius: 7)
+                )
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+    }
+
+    private var exportFrameRate: Int {
+        project?.settings.framesPerSecond ?? vm.settings.framesPerSecond
+    }
+
+    private var exportBitrate: Int {
+        selectedExportQuality.videoBitrate(
+            baseBitrate: SocialVideoEncoding.videoBitrate(
+                resolution: selectedResolution,
+                fps: exportFrameRate
+            )
+        )
+    }
+
+    private var exportSummary: String {
+        let layout = captureLayout ?? vm.settings.layout
+        let dimensions = selectedResolution.dimensions(for: layout)
+        let bitrate = Double(exportBitrate) / 1_000_000
+        let estimatedBytes = Int64(max(0, timelineDuration) * Double(exportBitrate + 192_000) / 8)
+        let estimatedSize = ByteCountFormatter.string(fromByteCount: estimatedBytes, countStyle: .file)
+        let bitrateLabel = String(format: "%.1f", bitrate)
+        return "\(dimensions.width) × \(dimensions.height) · \(exportFrameRate) fps · "
+            + "HEVC · \(bitrateLabel) Mbps · ~\(estimatedSize)"
+    }
+
+    private func exportVideo() {
+        isExportPopoverPresented = false
+        vm.exportLastProject(EditorExportRequest(
+            outputFormat: selectedFormat,
+            outputResolution: selectedResolution,
+            videoQuality: selectedExportQuality,
+            hiddenVideoSources: playback.hiddenKinds,
+            mutedAudioSources: playback.mutedSources
+        ))
     }
 
     private var editorExportProgressBar: some View {
@@ -407,7 +621,11 @@ struct EditorView: View {
                 .fill(Color.black)
 
             if playback.isReady {
-                EditorCompositedPlayer(controller: playback, renderSize: playback.renderSize)
+                EditorCompositedPlayer(
+                    controller: playback,
+                    renderSize: playback.renderSize,
+                    previewSceneRevision: playback.previewSceneRevision
+                )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipShape(.rect(cornerRadius: 12))
                     .allowsHitTesting(false)
@@ -573,8 +791,12 @@ struct EditorView: View {
     private var displayedCanvasLayers: [EditorCanvasLayer] {
         let frames: [(kind: SceneLayerKind, frame: CGRect)]
         let editable: Bool
-        if let draft = layoutDraft {
-            frames = playback.layerFrames(for: draft.scene)
+        let draftScene = EditorCanvasOverlaySceneResolver.scene(request: .init(
+            layoutDraftScene: layoutDraft?.scene,
+            canvasDraftScene: canvasSceneDraft
+        ))
+        if let draftScene {
+            frames = playback.layerFrames(for: draftScene)
             editable = true
         } else {
             frames = playback.layerFrames(at: playback.currentTime)
@@ -814,21 +1036,11 @@ struct EditorView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     switch inspectorTab {
                     case .layout:
-                        if let kind = selectedVideoLayerKind {
-                            frameAspectSection(kind)
-                        }
-                        sceneControlsSection
-                        if case .segment(let index) = selection {
-                            segmentSection(index: index)
-                        }
-                        if case .asset(let id) = selection,
-                           let asset = assets.first(where: { $0.id == id }),
-                           asset.kind == .camera {
-                            cameraFrameSection
-                        }
+                        layoutInspectorContent
                     case .canvas:
+                        canvasPaddingSection
+                        screenAppearanceSection
                         canvasControlsSection
-                        detailsSection
                     case .audio:
                         audioControlsSection
                     }
@@ -836,6 +1048,26 @@ struct EditorView: View {
                 .padding(14)
             }
             .scrollIndicators(.hidden)
+            .id(inspectorTab)
+        }
+    }
+
+    @ViewBuilder
+    private var layoutInspectorContent: some View {
+        if let kind = selectedVideoLayerKind {
+            frameAspectSection(kind)
+            switch kind {
+            case .screen:
+                screenZoomSection
+            case .camera:
+                cameraFrameSection
+            }
+        } else {
+            sceneControlsSection
+            if case .segment(let index) = selection {
+                segmentSection(index: index)
+            }
+            screenZoomSection
         }
     }
 
@@ -890,56 +1122,59 @@ struct EditorView: View {
                     }
                 }
 
-                if scene.enabledSources.contains(.screen) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Label("Screen zoom", systemImage: "plus.magnifyingglass")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.72))
-                            Spacer(minLength: 0)
-                            Text(screenZoomLabel)
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .monospacedDigit()
-                                .foregroundStyle(.white.opacity(0.62))
-                        }
-
-                        HStack(spacing: 8) {
-                            Slider(
-                                value: screenZoomBinding,
-                                in: 0...0.75,
-                                onEditingChanged: { isEditing in
-                                    if !isEditing {
-                                        commitScreenZoom()
-                                    }
-                                }
-                            )
-                            .controlSize(.small)
-                            .tint(BlitzUI.mint)
-
-                            Button {
-                                previewScreenZoom(0)
-                                commitScreenZoom()
-                            } label: {
-                                Image(systemName: "arrow.counterclockwise")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .frame(width: 28, height: 24)
-                            }
-                            .buttonStyle(.plain)
-                            .background(BlitzUI.controlFill, in: .rect(cornerRadius: 7))
-                            .disabled(screenZoomValue < 0.001)
-                            .pointingHandCursor()
-                            .help("Reset screen zoom")
-                        }
-                    }
-                    .padding(10)
-                    .background(BlitzUI.quietFill, in: .rect(cornerRadius: 10))
-                }
-
                 Text("Drag a source on the canvas to reposition it. The edit applies to the current segment.")
                     .font(.system(size: 9.5, weight: .medium))
                     .foregroundStyle(.white.opacity(0.42))
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var screenZoomSection: some View {
+        if currentEventScene?.enabledSources.contains(.screen) == true {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Label("Source crop", systemImage: "crop")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.72))
+                    Spacer(minLength: 0)
+                    Text(screenZoomLabel)
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .monospacedDigit()
+                        .foregroundStyle(.white.opacity(0.62))
+                }
+
+                HStack(spacing: 8) {
+                    Slider(
+                        value: screenZoomBinding,
+                        in: 0...0.75,
+                        onEditingChanged: { isEditing in
+                            if !isEditing {
+                                commitScreenZoom()
+                            }
+                        }
+                    )
+                    .controlSize(.small)
+                    .tint(BlitzUI.mint)
+
+                    Button {
+                        previewScreenZoom(0)
+                        commitScreenZoom()
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 10, weight: .bold))
+                            .frame(width: 28, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .background(BlitzUI.controlFill, in: .rect(cornerRadius: 7))
+                    .disabled(screenZoomValue < 0.001)
+                    .pointingHandCursor()
+                    .help("Reset source crop")
+                }
+            }
+            .padding(10)
+            .background(BlitzUI.quietFill, in: .rect(cornerRadius: 10))
         }
     }
 
@@ -992,9 +1227,11 @@ struct EditorView: View {
     private func previewScreenZoom(_ zoom: Double) {
         guard var scene = currentEventScene else { return }
         let clamped = min(0.75, max(0, zoom))
+        if screenZoomDraft == nil {
+            playback.pauseForEditing()
+        }
         screenZoomDraft = clamped
         scene.screenCropAmount = CGPoint(x: clamped, y: clamped)
-        playback.pauseForEditing()
         playback.setPreviewSceneOverride(scene, at: playback.currentTime)
     }
 
@@ -1012,19 +1249,212 @@ struct EditorView: View {
     }
 
     private func setCanvasBackground(_ style: CanvasBackgroundStyle) {
-        let index = currentEventIndex
-        guard vm.applyProjectSceneEdit(eventIndex: index, { scene in
+        previewCanvasScene { scene in
             scene.canvasBackgroundStyle = style
-        }) else {
-            editErrorMessage = vm.detailMessage
-            return
         }
-        selection = .segment(index)
+        scheduleCanvasSceneCommit()
+        selection = .segment(currentEventIndex)
+    }
+
+    @ViewBuilder
+    private var canvasPaddingSection: some View {
+        if currentEventScene != nil {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    BlitzUI.sectionLabel("Padding", icon: "rectangle.inset.filled")
+                    Spacer(minLength: 0)
+                    Text("\(Int((canvasPaddingValue * 100).rounded()))%")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .monospacedDigit()
+                        .foregroundStyle(.white.opacity(0.64))
+                }
+
+                HStack(spacing: 8) {
+                    Slider(
+                        value: canvasPaddingBinding,
+                        in: 0...0.12,
+                        step: 0.005,
+                        onEditingChanged: { isEditing in
+                            if !isEditing {
+                                commitCanvasPadding()
+                            }
+                        }
+                    )
+                    .controlSize(.small)
+                    .tint(BlitzUI.mint)
+
+                    Button {
+                        previewCanvasPadding(0)
+                        commitCanvasPadding()
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 10, weight: .bold))
+                            .frame(width: 28, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .background(BlitzUI.controlFill, in: .rect(cornerRadius: 7))
+                    .disabled(canvasPaddingValue < 0.001)
+                    .pointingHandCursor()
+                    .help("Remove canvas padding")
+                }
+
+                Text("Adds breathing room around the video sources in this segment.")
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.42))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(10)
+            .background(BlitzUI.quietFill, in: .rect(cornerRadius: 10))
+        }
+    }
+
+    private var canvasPaddingValue: CGFloat {
+        displayedCanvasScene?.canvasPadding ?? 0
+    }
+
+    private var canvasPaddingBinding: Binding<CGFloat> {
+        Binding(
+            get: { canvasPaddingValue },
+            set: { previewCanvasPadding($0) }
+        )
+    }
+
+    private func previewCanvasPadding(_ padding: CGFloat) {
+        let clamped = min(0.12, max(0, padding))
+        previewCanvasScene { scene in
+            scene.canvasPadding = clamped
+        }
+    }
+
+    private func commitCanvasPadding() {
+        commitCanvasSceneDraft()
+    }
+
+    @ViewBuilder
+    private var screenAppearanceSection: some View {
+        if let scene = displayedCanvasScene, scene.renderedSources.contains(.screen) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    BlitzUI.sectionLabel("Screen", icon: "display")
+                    Spacer(minLength: 0)
+                    Text("\(Int((screenCornerRadiusValue * 100).rounded()))% corners")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .monospacedDigit()
+                        .foregroundStyle(.white.opacity(0.64))
+                }
+
+                Slider(
+                    value: screenCornerRadiusBinding,
+                    in: 0...0.12,
+                    step: 0.005,
+                    onEditingChanged: { isEditing in
+                        if !isEditing {
+                            commitScreenCornerRadius()
+                        }
+                    }
+                )
+                .controlSize(.small)
+                .tint(BlitzUI.mint)
+                .help("Round the screen recording independently of canvas padding")
+
+                Toggle(isOn: screenShadowBinding) {
+                    Label("Shadow", systemImage: "square.stack.3d.down.right")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .tint(BlitzUI.mint)
+                .help("Add a soft shadow under the screen recording")
+
+                Text("Corners and shadow are independent from padding.")
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.42))
+            }
+            .padding(10)
+            .background(BlitzUI.quietFill, in: .rect(cornerRadius: 10))
+        }
+    }
+
+    private var screenCornerRadiusValue: CGFloat {
+        displayedCanvasScene?.screenCornerRadius ?? 0
+    }
+
+    private var screenCornerRadiusBinding: Binding<CGFloat> {
+        Binding(
+            get: { screenCornerRadiusValue },
+            set: { previewScreenCornerRadius($0) }
+        )
+    }
+
+    private func previewScreenCornerRadius(_ radius: CGFloat) {
+        let clamped = min(0.12, max(0, radius))
+        previewCanvasScene { scene in
+            scene.screenCornerRadius = clamped
+        }
+    }
+
+    private func commitScreenCornerRadius() {
+        commitCanvasSceneDraft()
+    }
+
+    private var screenShadowBinding: Binding<Bool> {
+        Binding(
+            get: { displayedCanvasScene?.screenShadowEnabled ?? false },
+            set: { enabled in
+                previewCanvasScene { scene in
+                    scene.screenShadowEnabled = enabled
+                }
+                scheduleCanvasSceneCommit()
+            }
+        )
+    }
+
+    private var displayedCanvasScene: RecordingScene? {
+        canvasSceneDraft ?? currentEventScene
+    }
+
+    private func previewCanvasScene(_ mutate: (inout RecordingScene) -> Void) {
+        guard var scene = displayedCanvasScene else { return }
+        if canvasSceneDraft == nil {
+            playback.pauseForEditing()
+        }
+        mutate(&scene)
+        canvasSceneDraft = scene
+        playback.setPreviewSceneOverride(scene, at: playback.currentTime)
+    }
+
+    private func scheduleCanvasSceneCommit() {
+        canvasCommitTask?.cancel()
+        canvasCommitTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(20))
+            guard !Task.isCancelled else { return }
+            commitCanvasSceneDraft()
+        }
+    }
+
+    private func commitCanvasSceneDraft() {
+        canvasCommitTask?.cancel()
+        canvasCommitTask = nil
+        guard let draft = canvasSceneDraft else { return }
+        let index = currentEventIndex
+        preservesCanvasPreviewOnNextProjectRefresh = true
+        let succeeded = vm.applyProjectSceneEdit(eventIndex: index) { scene in
+            scene.canvasBackgroundStyle = draft.canvasBackgroundStyle
+            scene.canvasPadding = draft.canvasPadding
+            scene.screenCornerRadius = draft.screenCornerRadius
+            scene.screenShadowEnabled = draft.screenShadowEnabled
+        }
+        if !succeeded {
+            preservesCanvasPreviewOnNextProjectRefresh = false
+            canvasSceneDraft = nil
+            playback.setPreviewSceneOverride(nil, at: playback.currentTime)
+            editErrorMessage = vm.detailMessage
+        }
     }
 
     @ViewBuilder
     private var canvasControlsSection: some View {
-        if let scene = currentEventScene {
+        if let scene = displayedCanvasScene {
             VStack(alignment: .leading, spacing: 10) {
                 BlitzUI.sectionLabel("Background", icon: "paintpalette")
 
@@ -1647,7 +2077,21 @@ private struct EditorCanvasSourcePreviewOverlay: View {
         }
         .frame(width: target.width, height: target.height, alignment: .topLeading)
         .clipShape(shape)
+        .shadow(
+            color: sourceShadowEnabled(for: kind) ? .black.opacity(0.38) : .clear,
+            radius: sourceShadowEnabled(for: kind) ? min(18, max(5, min(target.width, target.height) * 0.04)) : 0,
+            y: sourceShadowEnabled(for: kind) ? 5 : 0
+        )
         .offset(x: target.minX, y: target.minY)
+    }
+
+    private func sourceShadowEnabled(for kind: SceneLayerKind) -> Bool {
+        switch kind {
+        case .screen:
+            return scene.screenShadowEnabled
+        case .camera:
+            return scene.cameraShadowEnabled
+        }
     }
 }
 

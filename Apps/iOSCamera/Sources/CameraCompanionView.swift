@@ -797,10 +797,12 @@ private struct CameraMediaLibraryView: View {
                 CompanionStudioGrid()
 
                 List {
-                    Section {
-                        BlitzRecorderMacInstallCard()
-                            .listRowInsets(.init(top: 12, leading: 16, bottom: 12, trailing: 16))
-                            .listRowBackground(Color.clear)
+                    if !store.hasPairedMac {
+                        Section {
+                            BlitzRecorderMacInstallCard()
+                                .listRowInsets(.init(top: 12, leading: 16, bottom: 12, trailing: 16))
+                                .listRowBackground(Color.clear)
+                        }
                     }
 
                     Section {
@@ -818,13 +820,6 @@ private struct CameraMediaLibraryView: View {
                             .foregroundStyle(.white)
                             .listRowBackground(Color.clear)
                         } else {
-                            Button(role: .destructive) {
-                                confirmsDeleteAll = true
-                            } label: {
-                                Label("Delete All", systemImage: "trash")
-                            }
-                            .listRowBackground(CompanionTheme.panel)
-
                             ForEach(store.pendingRecordings) { recording in
                                 NavigationLink {
                                     CameraRecordingPlaybackView(
@@ -893,10 +888,14 @@ private struct CameraMediaLibraryView: View {
             .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(role: .destructive) {
-                        confirmsDeleteAll = true
+                    Menu {
+                        Button(role: .destructive) {
+                            confirmsDeleteAll = true
+                        } label: {
+                            Label("Delete All Clips", systemImage: "trash")
+                        }
                     } label: {
-                        Label("Delete All", systemImage: "trash")
+                        Image(systemName: "ellipsis.circle")
                     }
                     .disabled(store.pendingRecordings.isEmpty)
                 }

@@ -38,6 +38,8 @@ struct RecordingProject: Codable, Equatable {
         let canvasBackgroundStyle: String
         let canvasBackgroundAnimated: Bool
         let canvasPadding: Double
+        let screenCornerRadius: Double?
+        let screenShadowEnabled: Bool?
         let cameraContentMode: String
         let cameraFramePadding: Double
         let cameraShadowEnabled: Bool
@@ -81,12 +83,14 @@ struct RecordingProject: Codable, Equatable {
 
     struct ScreenSourceSnapshot: Codable, Equatable {
         let usesPickedContent: Bool
+        let fillsSceneFrame: Bool?
         let selectedDisplayID: String?
         let normalizedCrop: RectValue?
         let sourceAspectRatio: Double?
 
         init(_ geometry: ScreenSourceGeometry) {
             self.usesPickedContent = geometry.usesPickedContent
+            self.fillsSceneFrame = geometry.fillsSceneFrame
             self.selectedDisplayID = geometry.selectedDisplayID
             self.normalizedCrop = geometry.normalizedCrop.map(RectValue.init)
             self.sourceAspectRatio = geometry.sourceAspectRatio.map(Double.init)
@@ -104,6 +108,8 @@ struct RecordingProject: Codable, Equatable {
         let canvasBackgroundStyle: String
         let canvasBackgroundAnimated: Bool
         let canvasPadding: Double
+        let screenCornerRadius: Double?
+        let screenShadowEnabled: Bool?
         let cameraContentMode: String
         let cameraFramePadding: Double
         let cameraShadowEnabled: Bool
@@ -120,6 +126,8 @@ struct RecordingProject: Codable, Equatable {
             self.canvasBackgroundStyle = scene.canvasBackgroundStyle.rawValue
             self.canvasBackgroundAnimated = scene.canvasBackgroundAnimated
             self.canvasPadding = Double(scene.canvasPadding)
+            self.screenCornerRadius = Double(scene.screenCornerRadius)
+            self.screenShadowEnabled = scene.screenShadowEnabled
             self.cameraContentMode = scene.cameraContentMode.rawValue
             self.cameraFramePadding = Double(scene.cameraFramePadding)
             self.cameraShadowEnabled = scene.cameraShadowEnabled
@@ -326,6 +334,28 @@ struct RecordingProjectHistory: Codable, Equatable {
     var entries: [Entry]
 }
 
+enum RecordingProjectDeletionDisposition {
+    case trash
+    case permanent
+}
+
+struct RecordingProjectDeletionRequest {
+    let project: RecordingProjectHistory.Entry
+    let settings: RecordingSettings
+    let disposition: RecordingProjectDeletionDisposition
+}
+
+struct RecordingProjectRenameRequest {
+    let projectURL: URL
+    let title: String
+    let settings: RecordingSettings
+}
+
+private struct ProjectHistoryWriteRequest {
+    let history: RecordingProjectHistory
+    let settings: RecordingSettings
+}
+
 enum RecordingProjectSceneCorrection: String, CaseIterable {
     case screenOnly
     case cameraOnly
@@ -367,6 +397,8 @@ extension RecordingProject.SettingsSnapshot {
         self.canvasBackgroundStyle = settings.canvasBackgroundStyle.rawValue
         self.canvasBackgroundAnimated = settings.canvasBackgroundAnimated
         self.canvasPadding = Double(settings.canvasPadding)
+        self.screenCornerRadius = Double(settings.screenCornerRadius)
+        self.screenShadowEnabled = settings.screenShadowEnabled
         self.cameraContentMode = settings.cameraContentMode.rawValue
         self.cameraFramePadding = Double(settings.cameraFramePadding)
         self.cameraShadowEnabled = settings.cameraShadowEnabled
@@ -386,7 +418,7 @@ private extension RecordingSceneTransition {
     }
 }
 
-private extension RecordingScene {
+extension RecordingScene {
     init?(snapshot: RecordingProject.SceneSnapshot) {
         let enabledSources = Set(snapshot.enabledSources.compactMap(CaptureSource.init(rawValue:)))
         let layerOrder = snapshot.sceneLayout.layerOrder.compactMap(SceneLayerKind.init(rawValue:))
@@ -399,6 +431,7 @@ private extension RecordingScene {
             ),
             screenSourceGeometry: ScreenSourceGeometry(
                 usesPickedContent: snapshot.screenSourceGeometry.usesPickedContent,
+                fillsSceneFrame: snapshot.screenSourceGeometry.fillsSceneFrame ?? false,
                 selectedDisplayID: snapshot.screenSourceGeometry.selectedDisplayID,
                 normalizedCrop: snapshot.screenSourceGeometry.normalizedCrop.map(CGRect.init),
                 sourceAspectRatio: snapshot.screenSourceGeometry.sourceAspectRatio.map { CGFloat($0) }
@@ -410,6 +443,8 @@ private extension RecordingScene {
             canvasBackgroundStyle: CanvasBackgroundStyle(rawValue: snapshot.canvasBackgroundStyle) ?? .black,
             canvasBackgroundAnimated: snapshot.canvasBackgroundAnimated,
             canvasPadding: CGFloat(snapshot.canvasPadding),
+            screenCornerRadius: CGFloat(snapshot.screenCornerRadius ?? 0),
+            screenShadowEnabled: snapshot.screenShadowEnabled ?? false,
             cameraContentMode: CameraContentMode(rawValue: snapshot.cameraContentMode) ?? .fill,
             cameraFramePadding: 0,
             cameraShadowEnabled: snapshot.cameraShadowEnabled,
@@ -720,6 +755,94 @@ struct TakeFileStore {
         return try decoder.decode(RecordingProject.self, from: data)
     }
 
+    func renameProject(
+        _ request: RecordingProjectRenameRequest
+    ) throws -> RecordingProject {
+        let title = request.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else {
+            throw RecorderError.mediaWriteFailed("Enter a recording title.")
+        }
+
+        let project = try loadRecordingProject(at: request.projectURL)
+        let renamedProject = RecordingProject(
+            version: project.version,
+            id: project.id,
+            createdAt: project.createdAt,
+            updatedAt: Date(),
+            title: title,
+            projectPath: project.projectPath,
+            takeDirectoryPath: project.takeDirectoryPath,
+            finalVideoPath: project.finalVideoPath,
+            settings: project.settings,
+            sources: project.sources,
+            sceneEvents: project.sceneEvents,
+            chapters: project.chapters,
+            editorTimeline: project.editorTimeline,
+            timelineTrimOffsetSeconds: project.timelineTrimOffsetSeconds,
+            sourceTimelineOffsetSeconds: project.sourceTimelineOffsetSeconds
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(renamedProject).write(
+            to: request.projectURL,
+            options: .atomic
+        )
+        try upsertProjectHistory(renamedProject, settings: request.settings)
+        return renamedProject
+    }
+
+    func deleteProject(_ request: RecordingProjectDeletionRequest) throws {
+        let fileManager = FileManager.default
+        let outputDirectoryAccess = OutputDirectoryAccess(
+            url: request.settings.outputDirectory,
+            usesSecurityScopedBookmark: request.settings.outputDirectoryBookmarkData != nil
+        )
+        guard outputDirectoryAccess.hasSecurityScopedAccess else {
+            outputDirectoryAccess.stop()
+            throw RecorderError.outputDirectoryUnavailable(
+                Self.permissionRecoveryMessage(for: request.settings.outputDirectory)
+            )
+        }
+        defer {
+            outputDirectoryAccess.stop()
+        }
+
+        let projectDirectory = URL(
+            fileURLWithPath: request.project.takeDirectoryPath,
+            isDirectory: true
+        ).standardizedFileURL
+        let projectsRoot = scratchRoot(for: request.settings).standardizedFileURL
+        let projectsRootPrefix = projectsRoot.path.hasSuffix("/")
+            ? projectsRoot.path
+            : projectsRoot.path + "/"
+
+        guard projectDirectory.path.hasPrefix(projectsRootPrefix) else {
+            throw RecorderError.mediaWriteFailed(
+                "This project is outside the BlitzRecorder source projects folder."
+            )
+        }
+
+        if fileManager.fileExists(atPath: projectDirectory.path) {
+            switch request.disposition {
+            case .trash:
+                try fileManager.trashItem(at: projectDirectory, resultingItemURL: nil)
+            case .permanent:
+                try fileManager.removeItem(at: projectDirectory)
+            }
+        }
+
+        var history = loadProjectHistory(settings: request.settings)
+        history.entries.removeAll {
+            $0.id == request.project.id || $0.projectPath == request.project.projectPath
+        }
+        try writeProjectHistory(ProjectHistoryWriteRequest(
+            history: history,
+            settings: request.settings
+        ))
+    }
+
     func recordingTake(
         from project: RecordingProject,
         settings: RecordingSettings,
@@ -771,6 +894,8 @@ struct TakeFileStore {
         settings.canvasBackgroundStyle = CanvasBackgroundStyle(rawValue: project.settings.canvasBackgroundStyle) ?? settings.canvasBackgroundStyle
         settings.canvasBackgroundAnimated = project.settings.canvasBackgroundAnimated
         settings.canvasPadding = CGFloat(project.settings.canvasPadding)
+        settings.screenCornerRadius = CGFloat(project.settings.screenCornerRadius ?? 0)
+        settings.screenShadowEnabled = project.settings.screenShadowEnabled ?? false
         settings.cameraContentMode = CameraContentMode(rawValue: project.settings.cameraContentMode) ?? settings.cameraContentMode
         settings.cameraFramePadding = 0
         settings.cameraShadowEnabled = project.settings.cameraShadowEnabled
@@ -783,6 +908,8 @@ struct TakeFileStore {
             settings.selectedDisplayID = firstScene.screenSourceGeometry.selectedDisplayID
             settings.cameraCropAmount = firstScene.cameraCropAmount
             settings.cameraCropPosition = firstScene.cameraCropPosition
+            settings.screenCornerRadius = firstScene.screenCornerRadius
+            settings.screenShadowEnabled = firstScene.screenShadowEnabled
         }
         return settings
     }
@@ -1084,11 +1211,6 @@ struct TakeFileStore {
     }
 
     private func upsertProjectHistory(_ project: RecordingProject, settings: RecordingSettings) throws {
-        let historyURL = projectHistoryURL(for: settings)
-        try FileManager.default.createDirectory(
-            at: historyURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
         var history = loadProjectHistory(settings: settings)
         history.entries.removeAll { $0.id == project.id || $0.projectPath == project.projectPath }
         history.entries.insert(
@@ -1103,11 +1225,22 @@ struct TakeFileStore {
             at: 0
         )
         history.entries.sort { $0.updatedAt > $1.updatedAt }
+        try writeProjectHistory(ProjectHistoryWriteRequest(
+            history: history,
+            settings: settings
+        ))
+    }
 
+    private func writeProjectHistory(_ request: ProjectHistoryWriteRequest) throws {
+        let historyURL = projectHistoryURL(for: request.settings)
+        try FileManager.default.createDirectory(
+            at: historyURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(history)
+        let data = try encoder.encode(request.history)
         try data.write(to: historyURL, options: .atomic)
     }
 

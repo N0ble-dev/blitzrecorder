@@ -38,7 +38,7 @@ struct SceneRenderPlacementPolicy {
     func cornerRadius(for kind: SceneLayerKind) -> CGFloat {
         SceneLayoutProjection.sourceCornerRadius(
             for: targetRect(for: kind),
-            canvasPadding: scene.canvasPadding
+            normalizedRadius: kind == .screen ? scene.screenCornerRadius : 0
         )
     }
 
@@ -74,7 +74,7 @@ struct SceneRenderPlacementPolicy {
             targetRect: targetRect,
             cornerRadius: SceneLayoutProjection.sourceCornerRadius(
                 for: targetRect,
-                canvasPadding: scene.canvasPadding
+                normalizedRadius: kind == .screen ? scene.screenCornerRadius : 0
             ),
             videoPlacement: videoPlacement
         )
@@ -99,6 +99,9 @@ struct SceneRenderPlacementPolicy {
               scene.screenSourceGeometry.normalizedCrop == nil else {
             return paddedRect
         }
+        if scene.screenSourceGeometry.fillsSceneFrame {
+            return paddedRect
+        }
         if usesSideBySideScreenSlot(normalizedFrame) {
             return sideBySideScreenTargetRect(in: paddedRect)
         }
@@ -111,6 +114,12 @@ struct SceneRenderPlacementPolicy {
     private func contentMode(for kind: SceneLayerKind) -> VideoRenderContentMode {
         switch kind {
         case .screen:
+            if scene.canvasPadding > 0.001,
+               scene.screenSourceGeometry.normalizedCrop == nil,
+               scene.screenCropAmount.x < 0.001,
+               scene.screenCropAmount.y < 0.001 {
+                return .aspectFit
+            }
             return .aspectFill
         case .camera:
             return scene.cameraContentMode.renderContentMode

@@ -247,7 +247,10 @@ enum FinalExportPlanning {
         settings: RecordingSettings,
         sceneEvents: [RecordingSceneEvent]
     ) -> FinalExportEngine {
-        RecordingSceneTimeline.requiresCanvasAwareRendering(settings: settings, sceneEvents: sceneEvents)
+        if settings.customVideoBitrate != nil {
+            return .optimizedWriter
+        }
+        return RecordingSceneTimeline.requiresCanvasAwareRendering(settings: settings, sceneEvents: sceneEvents)
             ? .assetExportSession
             : .optimizedWriter
     }

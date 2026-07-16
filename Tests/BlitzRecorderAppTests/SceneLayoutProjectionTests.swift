@@ -130,7 +130,7 @@ final class SceneLayoutProjectionTests: XCTestCase {
         XCTAssertEqual(frame.width / frame.height, 0.5, accuracy: 0.0001)
     }
 
-    func testSceneRenderGeometryOwnsActiveLayerOrderAndSourceMask() {
+    func testSceneRenderGeometryDoesNotAddMaskForCanvasPadding() {
         var settings = RecordingSettings()
         settings.enabledSources = [.screen, .camera]
         settings.canvasPadding = 0.1
@@ -143,7 +143,7 @@ final class SceneLayoutProjectionTests: XCTestCase {
         )
 
         XCTAssertEqual(geometry.activeLayerOrder, [.camera])
-        XCTAssertNotNil(geometry.sourceMaskPath())
+        XCTAssertNil(geometry.sourceMaskPath())
     }
 
 }

@@ -452,13 +452,22 @@ enum Merger {
             sourceAspectRatios: sourceAspectRatios
         )
         parentLayer.addSublayer(videoLayer)
-        addCameraShadowLayer(
-            to: parentLayer,
+        addSourceShadowLayer(SourceShadowLayerRequest(
+            parentLayer: parentLayer,
             frame: frame,
             renderSegments: renderSegments,
             duration: duration,
-            sourceAspectRatios: sourceAspectRatios
-        )
+            sourceAspectRatios: sourceAspectRatios,
+            kind: .screen
+        ))
+        addSourceShadowLayer(SourceShadowLayerRequest(
+            parentLayer: parentLayer,
+            frame: frame,
+            renderSegments: renderSegments,
+            duration: duration,
+            sourceAspectRatios: sourceAspectRatios,
+            kind: .camera
+        ))
         videoComposition.animationTool = AVVideoCompositionCoreAnimationTool(
             postProcessingAsVideoLayer: videoLayer,
             in: parentLayer
@@ -548,33 +557,39 @@ enum Merger {
         videoLayer.mask = maskLayer
     }
 
-    private static func addCameraShadowLayer(
-        to parentLayer: CALayer,
-        frame: CGRect,
-        renderSegments: [FinalExportRenderSegment],
-        duration: CMTime,
-        sourceAspectRatios: [SceneLayerKind: CGFloat]
-    ) {
-        guard !renderSegments.isEmpty else { return }
-        let shadowScenes = renderSegments.map(shadowScene)
-        let shadowPaths = shadowScenes.map {
-            cameraShadowPath(for: $0, frame: frame, sourceAspectRatios: sourceAspectRatios)
-        }
-        let clipPaths = shadowScenes.map {
-            cameraShadowClipPath(for: $0, frame: frame, sourceAspectRatios: sourceAspectRatios)
-        }
-        let shadowOpacities = zip(shadowScenes, renderSegments).map { scene, segment in
-            cameraShadowOpacity(
-                for: scene,
-                frame: frame,
-                activeLayerOrder: segment.activeLayerOrder,
-                sourceAspectRatios: sourceAspectRatios
+    private struct SourceShadowLayerRequest {
+        let parentLayer: CALayer
+        let frame: CGRect
+        let renderSegments: [FinalExportRenderSegment]
+        let duration: CMTime
+        let sourceAspectRatios: [SceneLayerKind: CGFloat]
+        let kind: SceneLayerKind
+    }
+
+    private struct SourceShadowGeometryRequest {
+        let segment: FinalExportRenderSegment
+        let frame: CGRect
+        let sourceAspectRatios: [SceneLayerKind: CGFloat]
+        let kind: SceneLayerKind
+    }
+
+    private static func addSourceShadowLayer(_ request: SourceShadowLayerRequest) {
+        guard !request.renderSegments.isEmpty else { return }
+        let geometryRequests = request.renderSegments.map { segment in
+            SourceShadowGeometryRequest(
+                segment: segment,
+                frame: request.frame,
+                sourceAspectRatios: request.sourceAspectRatios,
+                kind: request.kind
             )
         }
+        let shadowPaths = geometryRequests.map(sourceShadowPath)
+        let clipPaths = geometryRequests.map(sourceShadowClipPath)
+        let shadowOpacities = geometryRequests.map(sourceShadowOpacity)
         guard shadowOpacities.contains(where: { $0 > 0.001 }) else { return }
 
         let shadowLayer = CALayer()
-        shadowLayer.frame = frame
+        shadowLayer.frame = request.frame
         shadowLayer.shadowColor = CGColor(gray: 0, alpha: 1)
         shadowLayer.shadowRadius = 18
         shadowLayer.shadowOffset = CGSize(width: 0, height: -8)
@@ -582,47 +597,47 @@ enum Merger {
         shadowLayer.shadowOpacity = shadowOpacities[0]
 
         let clipLayer = CAShapeLayer()
-        clipLayer.frame = frame
+        clipLayer.frame = request.frame
         clipLayer.fillColor = CGColor(gray: 1, alpha: 1)
         clipLayer.fillRule = .evenOdd
         clipLayer.path = clipPaths[0]
         shadowLayer.mask = clipLayer
 
-        let durationSeconds = max(0, duration.seconds)
-        if renderSegments.count > 1, durationSeconds > 0 {
-            let keyTimes = pathKeyTimes(for: renderSegments, durationSeconds: durationSeconds)
+        let durationSeconds = max(0, request.duration.seconds)
+        if request.renderSegments.count > 1, durationSeconds > 0 {
+            let keyTimes = pathKeyTimes(for: request.renderSegments, durationSeconds: durationSeconds)
             let pathAnimation = CAKeyframeAnimation(keyPath: "shadowPath")
             pathAnimation.beginTime = AVCoreAnimationBeginTimeAtZero
             pathAnimation.duration = durationSeconds
             pathAnimation.keyTimes = keyTimes
-            pathAnimation.values = pathValues(shadowPaths, for: renderSegments)
+            pathAnimation.values = pathValues(shadowPaths, for: request.renderSegments)
             pathAnimation.calculationMode = .discrete
             pathAnimation.isRemovedOnCompletion = false
             pathAnimation.fillMode = .both
-            shadowLayer.add(pathAnimation, forKey: "camera-shadow-path")
+            shadowLayer.add(pathAnimation, forKey: "\(request.kind.rawValue)-shadow-path")
 
             let clipAnimation = CAKeyframeAnimation(keyPath: "path")
             clipAnimation.beginTime = AVCoreAnimationBeginTimeAtZero
             clipAnimation.duration = durationSeconds
             clipAnimation.keyTimes = keyTimes
-            clipAnimation.values = pathValues(clipPaths, for: renderSegments)
+            clipAnimation.values = pathValues(clipPaths, for: request.renderSegments)
             clipAnimation.calculationMode = .discrete
             clipAnimation.isRemovedOnCompletion = false
             clipAnimation.fillMode = .both
-            clipLayer.add(clipAnimation, forKey: "camera-shadow-clip-path")
+            clipLayer.add(clipAnimation, forKey: "\(request.kind.rawValue)-shadow-clip-path")
 
             let opacityAnimation = CAKeyframeAnimation(keyPath: "shadowOpacity")
             opacityAnimation.beginTime = AVCoreAnimationBeginTimeAtZero
             opacityAnimation.duration = durationSeconds
             opacityAnimation.keyTimes = keyTimes
-            opacityAnimation.values = opacityValues(shadowOpacities, for: renderSegments)
+            opacityAnimation.values = opacityValues(shadowOpacities, for: request.renderSegments)
             opacityAnimation.calculationMode = .discrete
             opacityAnimation.isRemovedOnCompletion = false
             opacityAnimation.fillMode = .both
-            shadowLayer.add(opacityAnimation, forKey: "camera-shadow-opacity")
+            shadowLayer.add(opacityAnimation, forKey: "\(request.kind.rawValue)-shadow-opacity")
         }
 
-        parentLayer.addSublayer(shadowLayer)
+        request.parentLayer.addSublayer(shadowLayer)
     }
 
     private static func shadowScene(for segment: FinalExportRenderSegment) -> RecordingScene {
@@ -631,60 +646,54 @@ enum Merger {
         return scene
     }
 
-    private static func cameraShadowPath(
-        for scene: RecordingScene,
-        frame: CGRect,
-        sourceAspectRatios: [SceneLayerKind: CGFloat]
-    ) -> CGPath {
-        let geometry = SceneRenderGeometry(canvas: frame, scene: scene, origin: .upperLeft)
-        let rect = geometry.visibleSourceRect(for: .camera, sourceAspectRatio: sourceAspectRatios[.camera])
-        let radius = geometry.sourceCornerRadius(for: .camera)
+    private static func sourceShadowPath(_ request: SourceShadowGeometryRequest) -> CGPath {
+        let scene = shadowScene(for: request.segment)
+        let geometry = SceneRenderGeometry(canvas: request.frame, scene: scene, origin: .upperLeft)
+        let rect = geometry.visibleSourceRect(
+            for: request.kind,
+            sourceAspectRatio: request.sourceAspectRatios[request.kind]
+        )
+        let radius = geometry.sourceCornerRadius(for: request.kind)
         guard rect.width > 0, rect.height > 0 else {
             return CGPath(rect: .zero, transform: nil)
         }
         return CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
     }
 
-    private static func cameraShadowClipPath(
-        for scene: RecordingScene,
-        frame: CGRect,
-        sourceAspectRatios: [SceneLayerKind: CGFloat]
-    ) -> CGPath {
-        let geometry = SceneRenderGeometry(canvas: frame, scene: scene, origin: .upperLeft)
-        let rect = geometry.visibleSourceRect(for: .camera, sourceAspectRatio: sourceAspectRatios[.camera])
-        let radius = geometry.sourceCornerRadius(for: .camera)
+    private static func sourceShadowClipPath(_ request: SourceShadowGeometryRequest) -> CGPath {
+        let scene = shadowScene(for: request.segment)
+        let geometry = SceneRenderGeometry(canvas: request.frame, scene: scene, origin: .upperLeft)
+        let rect = geometry.visibleSourceRect(
+            for: request.kind,
+            sourceAspectRatio: request.sourceAspectRatios[request.kind]
+        )
+        let radius = geometry.sourceCornerRadius(for: request.kind)
         let path = CGMutablePath()
-        path.addRect(frame)
+        path.addRect(request.frame)
         if rect.width > 0, rect.height > 0 {
             path.addRoundedRect(in: rect, cornerWidth: radius, cornerHeight: radius)
         }
         return path
     }
 
-    private static func cameraShadowOpacity(
-        for scene: RecordingScene,
-        frame: CGRect,
-        activeLayerOrder: [SceneLayerKind],
-        sourceAspectRatios: [SceneLayerKind: CGFloat]
-    ) -> Float {
-        guard scene.cameraShadowEnabled,
-              scene.renderedSources.contains(.camera),
-              cameraIsTopRenderedLayer(activeLayerOrder),
-              scene.sourceOpacity(for: .camera) > 0.001 else {
+    private static func sourceShadowOpacity(_ request: SourceShadowGeometryRequest) -> Float {
+        let scene = shadowScene(for: request.segment)
+        let isEnabled = request.kind == .screen ? scene.screenShadowEnabled : scene.cameraShadowEnabled
+        let isLayerEligible = request.kind == .screen || request.segment.activeLayerOrder.last == .camera
+        guard isEnabled,
+              scene.renderedSources.contains(request.kind.source),
+              isLayerEligible,
+              scene.sourceOpacity(for: request.kind.source) > 0.001 else {
             return 0
         }
-        let geometry = SceneRenderGeometry(canvas: frame, scene: scene, origin: .upperLeft)
+        let geometry = SceneRenderGeometry(canvas: request.frame, scene: scene, origin: .upperLeft)
         guard !geometry.isVisibleSourceFullCanvas(
-            for: .camera,
-            sourceAspectRatio: sourceAspectRatios[.camera]
+            for: request.kind,
+            sourceAspectRatio: request.sourceAspectRatios[request.kind]
         ) else {
             return 0
         }
-        return Float(0.38 * scene.sourceOpacity(for: .camera))
-    }
-
-    private static func cameraIsTopRenderedLayer(_ activeLayerOrder: [SceneLayerKind]) -> Bool {
-        activeLayerOrder.last == .camera
+        return Float(0.38 * scene.sourceOpacity(for: request.kind.source))
     }
 
     private static func roundedSourceMaskPath(

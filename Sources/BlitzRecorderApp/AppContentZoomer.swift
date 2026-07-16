@@ -9,11 +9,11 @@ enum AppContentZoomDirection {
     var messageVerb: String {
         switch self {
         case .zoomIn:
-            return "Zoomed in"
+            return "Made larger"
         case .zoomOut:
-            return "Zoomed out"
+            return "Made smaller"
         case .reset:
-            return "Reset zoom"
+            return "Reset"
         }
     }
 }

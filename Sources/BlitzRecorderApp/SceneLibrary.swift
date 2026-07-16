@@ -287,6 +287,8 @@ struct RecordingSceneSnapshot: Codable, Equatable {
     var canvasBackgroundStyle: CanvasBackgroundStyle
     var canvasBackgroundAnimated: Bool
     var canvasPadding: CGFloat
+    var screenCornerRadius: CGFloat
+    var screenShadowEnabled: Bool
     var cameraContentMode: CameraContentMode
     var cameraFramePadding: CGFloat
     var cameraShadowEnabled: Bool
@@ -306,6 +308,8 @@ struct RecordingSceneSnapshot: Codable, Equatable {
         canvasBackgroundStyle = settings.canvasBackgroundStyle
         canvasBackgroundAnimated = settings.canvasBackgroundAnimated
         canvasPadding = settings.canvasPadding
+        screenCornerRadius = settings.screenCornerRadius
+        screenShadowEnabled = settings.screenShadowEnabled
         cameraContentMode = settings.cameraContentMode
         cameraFramePadding = 0
         cameraShadowEnabled = settings.cameraShadowEnabled
@@ -328,6 +332,8 @@ struct RecordingSceneSnapshot: Codable, Equatable {
         canvasBackgroundStyle = try container.decode(CanvasBackgroundStyle.self, forKey: .canvasBackgroundStyle)
         canvasBackgroundAnimated = try container.decodeIfPresent(Bool.self, forKey: .canvasBackgroundAnimated) ?? false
         canvasPadding = try container.decode(CGFloat.self, forKey: .canvasPadding)
+        screenCornerRadius = try container.decodeIfPresent(CGFloat.self, forKey: .screenCornerRadius) ?? 0
+        screenShadowEnabled = try container.decodeIfPresent(Bool.self, forKey: .screenShadowEnabled) ?? false
         cameraContentMode = try container.decodeIfPresent(CameraContentMode.self, forKey: .cameraContentMode) ?? .fill
         _ = try container.decodeIfPresent(CGFloat.self, forKey: .cameraFramePadding)
         cameraFramePadding = 0

@@ -17,6 +17,16 @@ struct ResolvedScreenSource {
     let display: SCDisplay?
 }
 
+struct PickedScreenSourceRectRequest {
+    let settings: RecordingSettings
+    let filter: SCContentFilter
+}
+
+struct ScreenSourceCropRequest {
+    let sourceRect: CGRect
+    let normalizedCrop: CGRect?
+}
+
 enum ScreenCaptureGeometry {
     static func screenSource(for settings: RecordingSettings, content: SCShareableContent) throws -> ResolvedScreenSource {
         let binding = settings.screenSourceBinding
@@ -43,17 +53,24 @@ enum ScreenCaptureGeometry {
                 throw RecorderError.noDisplay
             }
             let filter = SCContentFilter(display: display, including: [application], exceptingWindows: [])
-            let sourceRect = applicationSourceRect(
+            let applicationRect = applicationSourceRect(
                 for: application,
                 on: display,
                 in: content
             )
+            let sourceRect = applicationRect.map {
+                croppedSourceRect(request: ScreenSourceCropRequest(
+                    sourceRect: $0,
+                    normalizedCrop: effectiveCrop(for: settings)
+                ))
+            }
             let sourceAspectRatio = sourceRect.map { $0.width / max(1, $0.height) }
                 ?? pickedContentAspectRatio(for: filter)
             return ResolvedScreenSource(
                 filter: filter,
                 geometry: ScreenSourceGeometry(
                     usesPickedContent: true,
+                    fillsSceneFrame: true,
                     selectedDisplayID: String(display.displayID),
                     normalizedCrop: nil,
                     sourceAspectRatio: sourceAspectRatio
@@ -91,8 +108,9 @@ enum ScreenCaptureGeometry {
     static func screenSourceGeometry(for settings: RecordingSettings, display: SCDisplay) -> ScreenSourceGeometry {
         ScreenSourceGeometry(
             usesPickedContent: false,
+            fillsSceneFrame: ScreenSourceGeometry.fillsSceneFrame(for: settings),
             selectedDisplayID: String(display.displayID),
-            normalizedCrop: settings.screenCrop,
+            normalizedCrop: effectiveCrop(for: settings),
             sourceAspectRatio: screenSourceAspectRatio(
                 for: settings,
                 fallback: aspectRatio(width: display.width, height: display.height)
@@ -104,8 +122,9 @@ enum ScreenCaptureGeometry {
         let fallbackAspectRatio = pickedContentAspectRatio(for: pickedFilter)
         return ScreenSourceGeometry(
             usesPickedContent: true,
+            fillsSceneFrame: true,
             selectedDisplayID: settings.selectedDisplayID,
-            normalizedCrop: settings.screenCrop,
+            normalizedCrop: effectiveCrop(for: settings),
             sourceAspectRatio: pickedScreenSourceAspectRatio(
                 for: settings,
                 fallback: fallbackAspectRatio
@@ -125,8 +144,9 @@ enum ScreenCaptureGeometry {
     static func screenSourceGeometryForTesting(settings: RecordingSettings, pickedContentAspectRatio: CGFloat) -> ScreenSourceGeometry {
         ScreenSourceGeometry(
             usesPickedContent: true,
+            fillsSceneFrame: true,
             selectedDisplayID: settings.selectedDisplayID,
-            normalizedCrop: settings.screenCrop,
+            normalizedCrop: effectiveCrop(for: settings),
             sourceAspectRatio: pickedScreenSourceAspectRatio(
                 for: settings,
                 fallback: pickedContentAspectRatio
@@ -261,6 +281,37 @@ enum ScreenCaptureGeometry {
             return SceneLayout.defaultScreenAspectRatio
         }
         return rect.width / rect.height
+    }
+
+    static func pickedSourceRect(request: PickedScreenSourceRectRequest) -> CGRect {
+        let contentRect = SCShareableContent.info(for: request.filter).contentRect
+        let bounds = CGRect(
+            x: 0,
+            y: 0,
+            width: max(2, contentRect.width),
+            height: max(2, contentRect.height)
+        )
+        return screenSourceGeometry(
+            for: request.settings,
+            pickedFilter: request.filter
+        ).sourceRect(in: bounds)
+    }
+
+    static func croppedSourceRect(request: ScreenSourceCropRequest) -> CGRect {
+        guard let normalizedCrop = request.normalizedCrop else { return request.sourceRect }
+        return CGRect(
+            x: request.sourceRect.minX + request.sourceRect.width * normalizedCrop.minX,
+            y: request.sourceRect.minY + request.sourceRect.height * normalizedCrop.minY,
+            width: request.sourceRect.width * normalizedCrop.width,
+            height: request.sourceRect.height * normalizedCrop.height
+        )
+    }
+
+    static func effectiveCrop(for settings: RecordingSettings) -> CGRect? {
+        ScreenSourceZoomGeometry.crop(request: .init(
+            baseCrop: settings.screenCrop,
+            zoom: settings.screenWindowZoom
+        ))
     }
 
     static func persistentBinding(forPickedContent filter: SCContentFilter) async -> ScreenSourceBinding? {

@@ -6,12 +6,17 @@ let directDistribution = ProcessInfo.processInfo.environment["DIRECT_DISTRIBUTIO
 
 var packageDependencies: [Package.Dependency] = [
     .package(path: "Packages/BlitzRecorderCore"),
-    .package(path: "Packages/BlitzRecorderTransport")
+    .package(path: "Packages/BlitzRecorderTransport"),
+    .package(
+        url: "https://github.com/FluidInference/FluidAudio.git",
+        exact: "0.15.5"
+    )
 ]
 
 var appDependencies: [Target.Dependency] = [
     .product(name: "BlitzRecorderCore", package: "BlitzRecorderCore"),
-    .product(name: "BlitzRecorderTransport", package: "BlitzRecorderTransport")
+    .product(name: "BlitzRecorderTransport", package: "BlitzRecorderTransport"),
+    .product(name: "FluidAudio", package: "FluidAudio")
 ]
 
 var appSwiftSettings: [SwiftSetting] = []
@@ -36,7 +41,8 @@ let package = Package(
             name: "BlitzRecorderApp",
             dependencies: appDependencies,
             resources: [
-                .copy("PrivacyInfo.xcprivacy")
+                .copy("PrivacyInfo.xcprivacy"),
+                .copy("ThirdPartyNotices.md")
             ],
             swiftSettings: appSwiftSettings,
             linkerSettings: [

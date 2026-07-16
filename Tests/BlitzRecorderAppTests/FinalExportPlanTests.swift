@@ -34,6 +34,22 @@ final class FinalExportPlanTests: XCTestCase {
         XCTAssertEqual(plan.engine, .assetExportSession)
     }
 
+    func testPlanUsesOptimizedWriterForCustomExportQuality() throws {
+        var settings = RecordingSettings()
+        settings.enabledSources = [.screen]
+        settings.customVideoBitrate = 12_000_000
+        var changedSettings = settings
+        changedSettings.canvasPadding = 0.08
+
+        let plan = try FinalExportPlanning.plan(
+            settings: settings,
+            sceneEvents: [RecordingSceneEvent(time: 0.2, scene: RecordingScene(settings: changedSettings))],
+            sources: [source(.screen, duration: 1)]
+        )
+
+        XCTAssertEqual(plan.engine, .optimizedWriter)
+    }
+
     func testPlanOffsetsRemoteCameraInsertionWithoutExtendingCompositionDuration() throws {
         var settings = RecordingSettings()
         settings.enabledSources = [.screen, .camera]

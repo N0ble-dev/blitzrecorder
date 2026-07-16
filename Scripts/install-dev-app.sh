@@ -16,7 +16,10 @@ DIRECT_DISTRIBUTION="${DIRECT_DISTRIBUTION:-1}"
 if [[ -z "${SIGN_IDENTITY:-}" ]]; then
   DEV_SIGN_IDENTITY="$(
     security find-identity -v -p codesigning 2>/dev/null \
-      | awk -F '"' '/Apple Development/ { print $2; exit }'
+      | awk -F '"' '
+          /Developer ID Application/ { print $2; found=1; exit }
+          /Apple Development/ && !fallback { fallback=$2 }
+          END { if (!found && fallback) print fallback }'
   )"
   if [[ -n "$DEV_SIGN_IDENTITY" ]]; then
     export SIGN_IDENTITY="$DEV_SIGN_IDENTITY"

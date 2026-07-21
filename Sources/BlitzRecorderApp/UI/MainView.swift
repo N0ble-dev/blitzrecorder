@@ -1386,13 +1386,13 @@ private struct SceneWorkspaceInspector: View {
                         get: { Double(vm.targetWindowZoom) },
                         set: { vm.setTargetWindowZoom(CGFloat($0)) }
                     ),
-                    in: ScreenSourceZoomGeometry.minimumZoom...ScreenSourceZoomGeometry.maximumZoom,
+                    in: WindowZoomGeometry.minimumZoom...WindowZoomGeometry.maximumZoom,
                     step: 0.05
                 )
                 .controlSize(.small)
                 .tint(BlitzUI.mint)
                 .disabled(!vm.canAdjustScreenCapture)
-                .help("Set how tightly the selected source fits its window")
+                .help("Resize the selected source window around its canvas frame")
 
                 windowSizeStepButton(icon: "arrow.counterclockwise", isDisabled: abs(vm.targetWindowZoom - 1) < 0.001) {
                     vm.resetTargetWindowZoom()
@@ -1401,7 +1401,7 @@ private struct SceneWorkspaceInspector: View {
             }
 
             HStack {
-                Text("100%")
+                Text("50%")
                 Spacer(minLength: 0)
                 Text("150%")
             }
@@ -1413,7 +1413,7 @@ private struct SceneWorkspaceInspector: View {
                 vm.fitCurrentScreenWindowToSlot()
             }
             .disabled(!vm.canAdjustScreenCapture)
-            .help("Resize the selected app or window to the current fit")
+            .help("Fit the selected app or window to its canvas frame")
 
             appContentZoomControl
         }
@@ -1439,7 +1439,7 @@ private struct SceneWorkspaceInspector: View {
                 appZoomButton("Larger", icon: "plus") {
                     vm.zoomScreenSourceContentIn()
                 }
-                .help("Send Cmd = to the selected app")
+                .help("Send Cmd + to the selected app")
             }
         }
     }

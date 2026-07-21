@@ -16,6 +16,7 @@ struct StudioSectionTabs: View {
     private struct TabConfiguration {
         let title: String
         let isSelected: Bool
+        let isEnabled: Bool
         let action: () -> Void
     }
 
@@ -24,15 +25,16 @@ struct StudioSectionTabs: View {
             tab(TabConfiguration(
                 title: "Record",
                 isSelected: vm.studioMode == .record,
+                isEnabled: true,
                 action: vm.showRecorder
             ))
 
             tab(TabConfiguration(
                 title: "Projects",
                 isSelected: vm.studioMode == .projects,
+                isEnabled: vm.canShowProjects,
                 action: vm.showProjects
             ))
-            .disabled(vm.state != .idle)
         }
         .padding(3)
         .background(.white.opacity(0.035), in: .rect(cornerRadius: 9))
@@ -49,7 +51,7 @@ struct StudioSectionTabs: View {
                 .foregroundStyle(
                     configuration.isSelected
                         ? .white.opacity(0.94)
-                        : .white.opacity(0.48)
+                        : .white.opacity(configuration.isEnabled ? 0.48 : 0.22)
                 )
                 .padding(.horizontal, 18)
                 .frame(height: 30)
@@ -70,7 +72,13 @@ struct StudioSectionTabs: View {
                 .contentShape(.rect(cornerRadius: 7))
         }
         .buttonStyle(ProjectLibraryPressButtonStyle())
-        .pointingHandCursor()
+        .disabled(!configuration.isEnabled)
+        .help(
+            configuration.isEnabled
+                ? configuration.title
+                : "Record a project to unlock Projects."
+        )
+        .pointingHandCursor(enabled: configuration.isEnabled)
     }
 }
 

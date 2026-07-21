@@ -112,6 +112,10 @@ final class RecorderViewModel {
     var recentProjects: [RecordingProjectHistory.Entry] = []
     var projectLibraryError: String?
 
+    var canShowProjects: Bool {
+        state == .idle && !recentProjects.isEmpty
+    }
+
     var availableDisplays: [SourceOption] = []
     var availableScreenSources: [ScreenSourceOption] = []
     var screenSourceThumbnails: [String: NSImage] = [:]
@@ -998,7 +1002,7 @@ final class RecorderViewModel {
     }
 
     func fitFrontWindowForShorts(zoom: CGFloat) {
-        cancelScheduledScreenSourceZoom()
+        cancelScheduledTargetWindowFit()
         screenCaptureAreaSelection = .activeWindow
         targetWindowZoom = clampedTargetWindowZoom(zoom)
         coordinator.setScreenWindowZoom(targetWindowZoom)
@@ -1009,21 +1013,21 @@ final class RecorderViewModel {
 
     func setTargetWindowZoom(_ zoom: CGFloat) {
         screenCaptureAreaSelection = .activeWindow
-        targetWindowZoom = ScreenSourceZoomGeometry.clamped(zoom)
+        targetWindowZoom = clampedTargetWindowZoom(zoom)
         coordinator.setScreenWindowZoom(targetWindowZoom)
         settings = coordinator.settings
-        scheduleScreenSourceZoom()
+        scheduleTargetWindowFit()
     }
 
     func applyTargetWindowZoom() {
-        cancelScheduledScreenSourceZoom()
+        cancelScheduledTargetWindowFit()
         fitCurrentScreenWindow(zoom: targetWindowZoom)
         syncSettings()
         refreshTargetWindow()
     }
 
     func fitCurrentScreenWindowToSlot() {
-        cancelScheduledScreenSourceZoom()
+        cancelScheduledTargetWindowFit()
         applyCurrentScreenWindowZoom(targetWindowZoom)
     }
 
@@ -1095,29 +1099,30 @@ final class RecorderViewModel {
         refreshTargetWindow()
     }
 
-    private func scheduleScreenSourceZoom() {
-        cancelScheduledScreenSourceZoom()
+    private func scheduleTargetWindowFit() {
+        cancelScheduledTargetWindowFit()
         let zoom = targetWindowZoom
-        let context = scheduledScreenSourceZoomContext()
+        let context = scheduledTargetWindowFitContext()
         targetWindowZoomTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 140_000_000)
             guard !Task.isCancelled, let self else { return }
-            guard self.scheduledScreenSourceZoomContext() == context,
+            guard self.scheduledTargetWindowFitContext() == context,
                   self.screenCaptureAreaSelection == .activeWindow else {
                 return
             }
             self.targetWindowZoomTask = nil
-            self.coordinator.setScreenSourceZoom(zoom)
+            self.fitCurrentScreenWindow(zoom: zoom)
             self.syncSettings()
+            self.refreshTargetWindow()
         }
     }
 
-    private func cancelScheduledScreenSourceZoom() {
+    private func cancelScheduledTargetWindowFit() {
         targetWindowZoomTask?.cancel()
         targetWindowZoomTask = nil
     }
 
-    private func scheduledScreenSourceZoomContext() -> ScheduledTargetWindowFitContext {
+    private func scheduledTargetWindowFitContext() -> ScheduledTargetWindowFitContext {
         ScheduledTargetWindowFitContext(
             areaSelection: screenCaptureAreaSelection,
             screenSourceBinding: settings.screenSourceBinding,
@@ -1388,7 +1393,7 @@ final class RecorderViewModel {
     }
 
     func setScreenSource(_ binding: ScreenSourceBinding) {
-        cancelScheduledScreenSourceZoom()
+        cancelScheduledTargetWindowFit()
         if binding.kind == .application {
             lastApplicationScreenSourceBinding = binding
         }
@@ -1418,7 +1423,7 @@ final class RecorderViewModel {
     }
 
     func setWindowOnlyCapture() {
-        cancelScheduledScreenSourceZoom()
+        cancelScheduledTargetWindowFit()
         if settings.screenSourceBinding?.kind == .window {
             screenCaptureAreaSelection = .activeWindow
             fitCurrentScreenWindow(zoom: targetWindowZoom)
@@ -1438,7 +1443,7 @@ final class RecorderViewModel {
     }
 
     func setFullDisplayScreenCapture() {
-        cancelScheduledScreenSourceZoom()
+        cancelScheduledTargetWindowFit()
         cancelScreenCropMode()
         let displayID = settings.screenSourceBinding?.displayID ?? settings.selectedDisplayID
         coordinator.setScreenSource(.display(id: displayID))
@@ -1909,6 +1914,9 @@ final class RecorderViewModel {
     func refreshRecentProjects() {
         recentProjects = TakeFileStore().loadProjectHistory(settings: settings).entries
         transcriptionController.syncProjects(recentProjects)
+        if recentProjects.isEmpty, studioMode == .projects {
+            studioMode = .record
+        }
     }
 
     func showRecorder() {
@@ -1918,6 +1926,10 @@ final class RecorderViewModel {
     func showProjects() {
         guard state == .idle else { return }
         refreshRecentProjects()
+        guard !recentProjects.isEmpty else {
+            studioMode = .record
+            return
+        }
         studioMode = .projects
     }
 
@@ -2022,7 +2034,7 @@ final class RecorderViewModel {
                 lastExportedProject = nil
             }
             refreshRecentProjects()
-            studioMode = .projects
+            studioMode = canShowProjects ? .projects : .record
         } catch {
             refreshRecentProjects()
             projectLibraryError = error.localizedDescription

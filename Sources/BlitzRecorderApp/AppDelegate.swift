@@ -39,7 +39,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuActionsTarget {
         accessController.configure()
         NSApp.setActivationPolicy(.regular)
         applyDevIconBadgeIfNeeded()
-        _ = updateController
 
         let windowController = MainWindowController(coordinator: coordinator)
         self.windowController = windowController
@@ -84,10 +83,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuActionsTarget {
         mainMenuBuilder = MainMenuBuilder(coordinator: coordinator, target: self)
         mainMenuBuilder?.install()
         mainMenuBuilder?.refreshDevices()
+        updateController.onStateChange = { [weak self] in
+            self?.mainMenuBuilder?.rebuild()
+        }
 
         buildStatusItem()
         updateStatusItem(for: coordinator.state)
         presentMainWindow()
+        updateController.start()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             self?.presentMainWindow()
         }
@@ -372,6 +375,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuActionsTarget {
         updateController.checkForUpdates(nil)
     }
 
+    var updateMenuItemTitle: String {
+        updateController.isCheckingForUpdates ? "Checking for Updates…" : "Check for Updates…"
+    }
+
+    var canCheckForUpdates: Bool {
+        updateController.canCheckForUpdates
+    }
+
     @objc func openReleaseNotes() {
         updateController.openReleaseNotes(nil)
     }
@@ -415,7 +426,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuActionsTarget {
         window.level = .normal
         windowController.showWindow(nil)
         window.makeKeyAndOrderFront(nil)
-        window.makeMain()
+        if window.canBecomeMain {
+            window.makeMain()
+        }
         window.orderFrontRegardless()
         window.displayIfNeeded()
 

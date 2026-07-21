@@ -3,6 +3,23 @@ import SwiftUI
 private let timelineContentSpace = "EditorTimelineContent"
 private let layoutSegmentFill = Color(red: 0.055, green: 0.235, blue: 0.255)
 
+struct EditorTimelineTrackDuration {
+    struct Request {
+        let rawDuration: Double?
+        let playbackDuration: Double
+    }
+
+    static func resolve(_ request: Request) -> Double {
+        let playbackDuration = request.playbackDuration.isFinite
+            ? max(0, request.playbackDuration)
+            : 0
+        guard let rawDuration = request.rawDuration, rawDuration.isFinite else {
+            return playbackDuration
+        }
+        return min(max(0, rawDuration), playbackDuration)
+    }
+}
+
 @MainActor
 struct EditorTimelineView: View {
     let project: RecordingProject?
@@ -383,7 +400,7 @@ struct EditorTimelineView: View {
 
     private func assetTrack(_ asset: EditorAsset, pxPerSecond: CGFloat, contentWidth: CGFloat) -> some View {
         let rowHeight: CGFloat = asset.isVideo ? videoRowHeight : audioRowHeight
-        let clipSeconds = library.durations[asset.id] ?? duration
+        let clipSeconds = trackDuration(for: asset)
         let width = max(14, CGFloat(clipSeconds) * pxPerSecond)
         let frames = library.filmstrips[asset.id] ?? []
         let requestedFrameCount = EditorFilmstripLayout.requestedFrameCount(width: width)
@@ -564,9 +581,16 @@ struct EditorTimelineView: View {
 
     private var contentSeconds: Double {
         let longestTrack = trackAssets
-            .compactMap { library.durations[$0.id] }
+            .map(trackDuration)
             .max() ?? 0
         return max(duration, longestTrack)
+    }
+
+    private func trackDuration(for asset: EditorAsset) -> Double {
+        EditorTimelineTrackDuration.resolve(.init(
+            rawDuration: library.durations[asset.id],
+            playbackDuration: duration
+        ))
     }
 
     private var gutterRows: [(icon: String, title: String, height: CGFloat, asset: EditorAsset?)] {

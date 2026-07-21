@@ -998,7 +998,13 @@ final class RecorderCoordinator {
             }
             guard self.screenSourceActionContext() == context else { return }
 
-            AppContentZoomer.apply(direction, to: processID)
+            guard AppContentZoomer.apply(AppContentZoomer.Request(
+                direction: direction,
+                processID: processID
+            )) else {
+                self.onMessage?("Could not map the app content shortcut for this keyboard.")
+                return
+            }
             self.onMessage?("\(direction.messageVerb) selected app content.")
         }
     }

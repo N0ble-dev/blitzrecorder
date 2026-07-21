@@ -205,7 +205,8 @@ actor LocalTranscriptionEngine {
             DiarizedInterval(
                 speakerID: segment.speakerId,
                 startTime: TimeInterval(segment.startTimeSeconds),
-                endTime: TimeInterval(segment.endTimeSeconds)
+                endTime: TimeInterval(segment.endTimeSeconds),
+                embedding: segment.embedding
             )
         }
     }

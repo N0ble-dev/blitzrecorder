@@ -48,17 +48,25 @@ private struct BlitzCardModifier: ViewModifier {
 }
 
 private struct PointingHandCursorModifier: ViewModifier {
+    let isEnabled: Bool
     @State private var isHovering = false
 
     func body(content: Content) -> some View {
         content
             .onHover { hovering in
+                guard isEnabled else { return }
                 guard hovering != isHovering else { return }
                 isHovering = hovering
                 if hovering {
                     NSCursor.pointingHand.push()
                 } else {
                     NSCursor.pop()
+                }
+            }
+            .onChange(of: isEnabled) {
+                if !isEnabled, isHovering {
+                    NSCursor.pop()
+                    isHovering = false
                 }
             }
             .onDisappear {
@@ -97,7 +105,7 @@ extension View {
         self.buttonStyle(.borderedProminent)
     }
 
-    func pointingHandCursor() -> some View {
-        modifier(PointingHandCursorModifier())
+    func pointingHandCursor(enabled: Bool = true) -> some View {
+        modifier(PointingHandCursorModifier(isEnabled: enabled))
     }
 }

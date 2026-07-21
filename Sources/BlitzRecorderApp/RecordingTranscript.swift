@@ -166,6 +166,19 @@ struct DiarizedInterval: Equatable, Sendable {
     let speakerID: String
     let startTime: TimeInterval
     let endTime: TimeInterval
+    let embedding: [Float]
+
+    init(
+        speakerID: String,
+        startTime: TimeInterval,
+        endTime: TimeInterval,
+        embedding: [Float] = []
+    ) {
+        self.speakerID = speakerID
+        self.startTime = startTime
+        self.endTime = endTime
+        self.embedding = embedding
+    }
 }
 
 enum RecordingTranscriptAssembler {
@@ -186,12 +199,13 @@ enum RecordingTranscriptAssembler {
                 ? left.endTime < right.endTime
                 : left.startTime < right.startTime
         }
+        let mergedIntervals = mergeAcousticDuplicates(request.diarizedIntervals)
         let assignedWords = sortedWords.map { word in
             AssignedWord(
                 word: word,
                 rawSpeakerID: speakerID(SpeakerResolutionRequest(
                     word: word,
-                    intervals: request.diarizedIntervals
+                    intervals: mergedIntervals
                 ))
             )
         }
@@ -433,6 +447,92 @@ enum RecordingTranscriptAssembler {
 
     private static func speakerNumber(_ speakerID: String) -> Int {
         Int(speakerID.split(separator: " ").last ?? "") ?? 0
+    }
+
+    static let acousticMergeMaxCosineDistance: Float = 0.72
+
+    static func mergeAcousticDuplicates(
+        _ intervals: [DiarizedInterval]
+    ) -> [DiarizedInterval] {
+        let centroids = speakerCentroids(intervals)
+        let speakerIDs = centroids.keys.sorted {
+            firstAppearance($0, in: intervals) < firstAppearance($1, in: intervals)
+        }
+        guard speakerIDs.count > 1 else { return intervals }
+
+        var canonical: [String: String] = [:]
+        for speakerID in speakerIDs { canonical[speakerID] = speakerID }
+
+        for i in speakerIDs.indices {
+            for j in (i + 1)..<speakerIDs.count {
+                let a = speakerIDs[i]
+                let b = speakerIDs[j]
+                guard resolve(b, in: canonical) != resolve(a, in: canonical),
+                      let ea = centroids[a], let eb = centroids[b] else { continue }
+                if cosineDistance(ea, eb) <= acousticMergeMaxCosineDistance {
+                    canonical[resolve(b, in: canonical)] = resolve(a, in: canonical)
+                }
+            }
+        }
+
+        return intervals.map { interval in
+            DiarizedInterval(
+                speakerID: resolve(interval.speakerID, in: canonical),
+                startTime: interval.startTime,
+                endTime: interval.endTime,
+                embedding: interval.embedding
+            )
+        }
+    }
+
+    private static func resolve(_ speakerID: String, in canonical: [String: String]) -> String {
+        var current = speakerID
+        while let next = canonical[current], next != current { current = next }
+        return current
+    }
+
+    private static func firstAppearance(
+        _ speakerID: String,
+        in intervals: [DiarizedInterval]
+    ) -> TimeInterval {
+        intervals.first { $0.speakerID == speakerID }?.startTime ?? .greatestFiniteMagnitude
+    }
+
+    private static func speakerCentroids(
+        _ intervals: [DiarizedInterval]
+    ) -> [String: [Float]] {
+        var sums: [String: [Float]] = [:]
+        var weights: [String: Float] = [:]
+        for interval in intervals {
+            guard !interval.embedding.isEmpty else { continue }
+            let weight = Float(max(interval.endTime - interval.startTime, 0.001))
+            if var sum = sums[interval.speakerID], sum.count == interval.embedding.count {
+                for k in sum.indices { sum[k] += interval.embedding[k] * weight }
+                sums[interval.speakerID] = sum
+                weights[interval.speakerID, default: 0] += weight
+            } else if sums[interval.speakerID] == nil {
+                sums[interval.speakerID] = interval.embedding.map { $0 * weight }
+                weights[interval.speakerID] = weight
+            }
+        }
+        return sums.reduce(into: [:]) { result, entry in
+            let total = weights[entry.key] ?? 1
+            result[entry.key] = entry.value.map { $0 / total }
+        }
+    }
+
+    private static func cosineDistance(_ a: [Float], _ b: [Float]) -> Float {
+        guard a.count == b.count, !a.isEmpty else { return .infinity }
+        var dot: Float = 0
+        var normA: Float = 0
+        var normB: Float = 0
+        for k in a.indices {
+            dot += a[k] * b[k]
+            normA += a[k] * a[k]
+            normB += b[k] * b[k]
+        }
+        guard normA > 0, normB > 0 else { return .infinity }
+        return 1 - dot / (normA.squareRoot() * normB.squareRoot())
     }
 }
 

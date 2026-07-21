@@ -257,6 +257,82 @@ final class RecordingTranscriptTests: XCTestCase {
         )
     }
 
+    func testAssemblerMergesAcousticDuplicateSpeakers() {
+        let micVoice: [Float] = [0.98, 0.02, 0.10, 0.15]
+        let echoedVoice: [Float] = [0.95, 0.05, 0.14, 0.20]
+        let transcript = RecordingTranscriptAssembler.assemble(
+            RecordingTranscriptAssembler.Request(
+                mediaPath: "/tmp/echo.mov",
+                generatedAt: Date(timeIntervalSince1970: 5_000),
+                duration: 4,
+                confidence: 0.9,
+                text: "Hello there. Still me.",
+                suggestedTitle: nil,
+                words: [
+                    TranscriptWord(text: "Hello", startTime: 0.1, endTime: 0.4, confidence: 0.9),
+                    TranscriptWord(text: "there.", startTime: 0.5, endTime: 0.9, confidence: 0.9),
+                    TranscriptWord(text: "Still", startTime: 2, endTime: 2.3, confidence: 0.9),
+                    TranscriptWord(text: "me.", startTime: 2.4, endTime: 2.8, confidence: 0.9),
+                ],
+                diarizedIntervals: [
+                    DiarizedInterval(
+                        speakerID: "mic-cluster",
+                        startTime: 0,
+                        endTime: 1.2,
+                        embedding: micVoice
+                    ),
+                    DiarizedInterval(
+                        speakerID: "system-cluster",
+                        startTime: 1.8,
+                        endTime: 3,
+                        embedding: echoedVoice
+                    ),
+                ]
+            )
+        )
+
+        XCTAssertEqual(transcript.speakerCount, 1)
+        XCTAssertEqual(transcript.speakers.map(\.id), ["Speaker 1"])
+    }
+
+    func testAssemblerKeepsDistinctSpeakersSeparate() {
+        let alice: [Float] = [0.98, 0.02, 0.10, 0.15]
+        let bob: [Float] = [0.05, 0.97, 0.90, 0.12]
+        let transcript = RecordingTranscriptAssembler.assemble(
+            RecordingTranscriptAssembler.Request(
+                mediaPath: "/tmp/two.mov",
+                generatedAt: Date(timeIntervalSince1970: 6_000),
+                duration: 4,
+                confidence: 0.9,
+                text: "Hello there. Hi Karim.",
+                suggestedTitle: nil,
+                words: [
+                    TranscriptWord(text: "Hello", startTime: 0.1, endTime: 0.4, confidence: 0.9),
+                    TranscriptWord(text: "there.", startTime: 0.5, endTime: 0.9, confidence: 0.9),
+                    TranscriptWord(text: "Hi", startTime: 2, endTime: 2.2, confidence: 0.9),
+                    TranscriptWord(text: "Karim.", startTime: 2.3, endTime: 2.8, confidence: 0.9),
+                ],
+                diarizedIntervals: [
+                    DiarizedInterval(
+                        speakerID: "raw-a",
+                        startTime: 0,
+                        endTime: 1.2,
+                        embedding: alice
+                    ),
+                    DiarizedInterval(
+                        speakerID: "raw-b",
+                        startTime: 1.8,
+                        endTime: 3,
+                        embedding: bob
+                    ),
+                ]
+            )
+        )
+
+        XCTAssertEqual(transcript.speakerCount, 2)
+        XCTAssertEqual(transcript.speakers.map(\.id), ["Speaker 1", "Speaker 2"])
+    }
+
     private func temporaryDirectory() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

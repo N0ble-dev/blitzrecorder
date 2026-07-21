@@ -613,7 +613,7 @@ private struct ScreenSourceFramingControl: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Text("Source crop")
+                Text("Window zoom")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.white.opacity(enabled ? 0.82 : 0.38))
 
@@ -630,23 +630,23 @@ private struct ScreenSourceFramingControl: View {
                     get: { Double(vm.targetWindowZoom) },
                     set: { vm.setTargetWindowZoom(CGFloat($0)) }
                 ),
-                in: ScreenSourceZoomGeometry.minimumZoom...ScreenSourceZoomGeometry.maximumZoom,
+                in: WindowZoomGeometry.minimumZoom...WindowZoomGeometry.maximumZoom,
                 step: 0.05
             )
             .controlSize(.small)
             .tint(BlitzUI.mint)
-            .disabled(!canCrop)
+            .disabled(!canUseWindowControls)
 
             HStack {
-                Text("100%")
+                Text("50%")
                 Spacer(minLength: 0)
                 Button("Reset") {
                     vm.resetTargetWindowZoom()
                 }
                 .font(.system(size: 11, weight: .semibold))
                 .buttonStyle(.plain)
-                .foregroundStyle(BlitzUI.mint.opacity(canCrop ? 0.82 : 0.3))
-                .disabled(!canCrop || abs(vm.targetWindowZoom - 1) < 0.001)
+                .foregroundStyle(BlitzUI.mint.opacity(canUseWindowControls ? 0.82 : 0.3))
+                .disabled(!canUseWindowControls || abs(vm.targetWindowZoom - 1) < 0.001)
                 Spacer(minLength: 0)
                 Text("150%")
             }
@@ -677,7 +677,7 @@ private struct ScreenSourceFramingControl: View {
             Button {
                 vm.fitCurrentScreenWindowToSlot()
             } label: {
-                Label("Fit window to source crop", systemImage: "rectangle.arrowtriangle.2.inward")
+                Label("Fit source window to frame", systemImage: "rectangle.arrowtriangle.2.inward")
                     .font(.system(size: 10.5, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.82))
                     .frame(maxWidth: .infinity, minHeight: 40)
@@ -754,10 +754,6 @@ private struct ScreenSourceFramingControl: View {
         .background(BlitzUI.controlFill, in: .rect(cornerRadius: 8))
         .disabled(!canUseWindowControls)
         .pointingHandCursor()
-    }
-
-    private var canCrop: Bool {
-        enabled && vm.canAdjustScreenCapture
     }
 
     private var canUseWindowControls: Bool {

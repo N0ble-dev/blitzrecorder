@@ -6,6 +6,37 @@ import XCTest
 
 @MainActor
 final class RecorderCoordinatorAccessTests: XCTestCase {
+    func testProjectsStayLockedUntilAProjectExists() throws {
+        let defaults = temporaryDefaults()
+        let coordinator = RecorderCoordinator(
+            accessController: AccessController(defaults: defaults),
+            defaults: defaults
+        )
+        let viewModel = RecorderViewModel(coordinator: coordinator, previewStage: PreviewStageView())
+        var settings = viewModel.settings
+        settings.outputDirectory = temporaryDirectory()
+        settings.savesSourceFiles = true
+        viewModel.settings = settings
+        viewModel.refreshRecentProjects()
+
+        XCTAssertFalse(viewModel.canShowProjects)
+        viewModel.showProjects()
+        guard case .record = viewModel.studioMode else {
+            XCTFail("Expected an empty project library to keep Record selected")
+            return
+        }
+
+        _ = try TakeFileStore().createTake(settings: settings)
+        viewModel.refreshRecentProjects()
+
+        XCTAssertTrue(viewModel.canShowProjects)
+        viewModel.showProjects()
+        guard case .projects = viewModel.studioMode else {
+            XCTFail("Expected Projects to unlock after a project is recorded")
+            return
+        }
+    }
+
     func testScreenCaptureAdjustmentsRemainAvailableDuringRecordingAndPause() {
         let defaults = temporaryDefaults()
         let viewModel = RecorderViewModel(

@@ -6,6 +6,14 @@ This project uses GitHub Releases for downloadable macOS builds. Release tags us
 
 ## Unreleased
 
+## 0.4.1 - 2026-07-21
+
+- Added in-app update checking through a signed, direct-download release feed.
+- Fixed content-zoom keyboard shortcuts so they work across keyboard layouts.
+- Fixed editor timeline track durations for captures with startup frames or shorter sources.
+- Improved source-window zoom and fit behavior in the canvas.
+- Refined transcript handling and project library interactions.
+
 ## 0.4.0 - 2026-07-16
 
 - Added a Projects library with playback, multi-selection, rename, delete, Finder access, and export workflows.

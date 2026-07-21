@@ -3,12 +3,12 @@ import AppKit
 @MainActor
 final class MainMenuBuilder {
     private weak var coordinator: RecorderCoordinator?
-    private weak var target: AnyObject?
+    private weak var target: MenuActionsTarget?
     private var displayOptions: [SourceOption] = []
     private var cameraOptions: [SourceOption] = []
     private var microphoneOptions: [SourceOption] = []
 
-    init(coordinator: RecorderCoordinator, target: AnyObject) {
+    init(coordinator: RecorderCoordinator, target: MenuActionsTarget) {
         self.coordinator = coordinator
         self.target = target
     }
@@ -43,7 +43,12 @@ final class MainMenuBuilder {
         let item = NSMenuItem()
         let submenu = NSMenu(title: "BlitzRecorder")
         submenu.addItem(menuItem("About BlitzRecorder", action: #selector(MenuActionsTarget.showAbout)))
-        submenu.addItem(menuItem("Check for Updates…", action: #selector(MenuActionsTarget.checkForUpdates)))
+        let updateItem = menuItem(
+            target?.updateMenuItemTitle ?? "Check for Updates…",
+            action: #selector(MenuActionsTarget.checkForUpdates)
+        )
+        updateItem.isEnabled = target?.canCheckForUpdates ?? false
+        submenu.addItem(updateItem)
         submenu.addItem(.separator())
         submenu.addItem(menuItem("Settings…", action: #selector(MenuActionsTarget.showSettings), keyEquivalent: ","))
         submenu.addItem(.separator())
@@ -257,6 +262,8 @@ final class MainMenuBuilder {
 @MainActor
 @objc protocol MenuActionsTarget: AnyObject {
     func showAbout()
+    var updateMenuItemTitle: String { get }
+    var canCheckForUpdates: Bool { get }
     func startRecording()
     func pauseRecording()
     func resumeRecording()

@@ -21,7 +21,14 @@ enum ProjectExportPlacement {
         do {
             try fileManager.copyItem(at: request.renderedURL, to: stagedURL)
             if fileManager.fileExists(atPath: request.destinationURL.path) {
-                _ = try fileManager.replaceItemAt(request.destinationURL, withItemAt: stagedURL)
+                do {
+                    _ = try fileManager.replaceItemAt(request.destinationURL, withItemAt: stagedURL)
+                } catch {
+                    // replaceItemAt relies on atomic exchange, which is unavailable on
+                    // exFAT/FAT and some network volumes. Fall back to remove + move.
+                    try? fileManager.removeItem(at: request.destinationURL)
+                    try fileManager.moveItem(at: stagedURL, to: request.destinationURL)
+                }
             } else {
                 try fileManager.moveItem(at: stagedURL, to: request.destinationURL)
             }
@@ -29,7 +36,10 @@ enum ProjectExportPlacement {
             return request.destinationURL
         } catch {
             try? fileManager.removeItem(at: stagedURL)
-            throw error
+            let reason = (error as NSError).localizedDescription
+            throw RecorderError.mediaWriteFailed(
+                "Couldn't save the export to \(destinationDirectory.lastPathComponent). \(reason) Try a folder on your Mac's internal drive."
+            )
         }
     }
 }

@@ -17,6 +17,7 @@ extension RecordingScene {
             canvasPadding: canvasPadding + (target.canvasPadding - canvasPadding) * progress,
             screenCornerRadius: screenCornerRadius + (target.screenCornerRadius - screenCornerRadius) * progress,
             screenShadowEnabled: progress < 1 ? screenShadowEnabled : target.screenShadowEnabled,
+            screenContentMode: progress < 1 ? screenContentMode : target.screenContentMode,
             cameraContentMode: progress < 1 ? cameraContentMode : target.cameraContentMode,
             cameraFramePadding: 0,
             cameraShadowEnabled: progress < 1 ? cameraShadowEnabled : target.cameraShadowEnabled,

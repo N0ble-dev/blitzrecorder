@@ -114,6 +114,9 @@ struct SceneRenderPlacementPolicy {
     private func contentMode(for kind: SceneLayerKind) -> VideoRenderContentMode {
         switch kind {
         case .screen:
+            if scene.screenContentMode == .fit {
+                return .aspectFit
+            }
             if scene.canvasPadding > 0.001,
                scene.screenSourceGeometry.normalizedCrop == nil,
                scene.screenCropAmount.x < 0.001,

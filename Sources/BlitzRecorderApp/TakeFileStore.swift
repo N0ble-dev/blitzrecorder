@@ -110,6 +110,7 @@ struct RecordingProject: Codable, Equatable {
         let canvasPadding: Double
         let screenCornerRadius: Double?
         let screenShadowEnabled: Bool?
+        let screenContentMode: String?
         let cameraContentMode: String
         let cameraFramePadding: Double
         let cameraShadowEnabled: Bool
@@ -128,6 +129,7 @@ struct RecordingProject: Codable, Equatable {
             self.canvasPadding = Double(scene.canvasPadding)
             self.screenCornerRadius = Double(scene.screenCornerRadius)
             self.screenShadowEnabled = scene.screenShadowEnabled
+            self.screenContentMode = scene.screenContentMode.rawValue
             self.cameraContentMode = scene.cameraContentMode.rawValue
             self.cameraFramePadding = Double(scene.cameraFramePadding)
             self.cameraShadowEnabled = scene.cameraShadowEnabled
@@ -445,6 +447,7 @@ extension RecordingScene {
             canvasPadding: CGFloat(snapshot.canvasPadding),
             screenCornerRadius: CGFloat(snapshot.screenCornerRadius ?? 0),
             screenShadowEnabled: snapshot.screenShadowEnabled ?? false,
+            screenContentMode: snapshot.screenContentMode.flatMap(CameraContentMode.init(rawValue:)) ?? .fill,
             cameraContentMode: CameraContentMode(rawValue: snapshot.cameraContentMode) ?? .fill,
             cameraFramePadding: 0,
             cameraShadowEnabled: snapshot.cameraShadowEnabled,

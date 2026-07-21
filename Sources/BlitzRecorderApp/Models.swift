@@ -1132,6 +1132,7 @@ struct RecordingScene: Equatable {
     var canvasPadding: CGFloat
     var screenCornerRadius: CGFloat
     var screenShadowEnabled: Bool
+    var screenContentMode: CameraContentMode
     var cameraContentMode: CameraContentMode
     var cameraFramePadding: CGFloat
     var cameraShadowEnabled: Bool
@@ -1170,6 +1171,7 @@ struct RecordingScene: Equatable {
         canvasPadding: CGFloat = 0,
         screenCornerRadius: CGFloat = 0,
         screenShadowEnabled: Bool = false,
+        screenContentMode: CameraContentMode = .fill,
         cameraContentMode: CameraContentMode = .fill,
         cameraFramePadding: CGFloat = 0,
         cameraShadowEnabled: Bool = false,
@@ -1187,6 +1189,7 @@ struct RecordingScene: Equatable {
         self.canvasPadding = canvasPadding
         self.screenCornerRadius = screenCornerRadius
         self.screenShadowEnabled = screenShadowEnabled
+        self.screenContentMode = screenContentMode
         self.cameraContentMode = cameraContentMode
         self.cameraFramePadding = 0
         self.cameraShadowEnabled = cameraShadowEnabled

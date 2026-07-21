@@ -631,7 +631,10 @@ private struct ScreenSourceFramingControl: View {
                     set: { vm.setTargetWindowZoom(CGFloat($0)) }
                 ),
                 in: WindowZoomGeometry.minimumZoom...WindowZoomGeometry.maximumZoom,
-                step: 0.05
+                step: 0.05,
+                onEditingChanged: { editing in
+                    if !editing { vm.fitCurrentScreenWindowToSlot() }
+                }
             )
             .controlSize(.small)
             .tint(BlitzUI.mint)

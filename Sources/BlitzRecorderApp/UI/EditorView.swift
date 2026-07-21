@@ -48,6 +48,10 @@ struct EditorView: View {
 
             if vm.state == .finishing {
                 editorExportProgressBar
+            } else if let error = vm.lastExportError {
+                editorExportErrorBar(error)
+            } else if let exported = vm.lastExportSucceededURL {
+                editorExportSuccessBar(exported)
             }
 
             divider
@@ -604,6 +608,82 @@ struct EditorView: View {
         .background(Color.black.opacity(0.22))
     }
 
+    private func editorExportSuccessBar(_ url: URL) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(BlitzUI.mint)
+                .frame(width: 22, height: 22)
+                .background(BlitzUI.mint.opacity(0.14), in: .rect(cornerRadius: 6))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Exported")
+                    .font(.system(size: 11.5, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.9))
+                Text(url.path)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.68))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Reveal in Finder") { vm.revealLastExportOrSource() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .tint(BlitzUI.mint)
+            Button {
+                vm.lastExportSucceededURL = nil
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(BlitzUI.mint.opacity(0.08))
+    }
+
+    private func editorExportErrorBar(_ message: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(BlitzUI.warning)
+                .frame(width: 22, height: 22)
+                .background(BlitzUI.warning.opacity(0.14), in: .rect(cornerRadius: 6))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Export failed")
+                    .font(.system(size: 11.5, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.9))
+                Text(message)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.68))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Try again") { exportVideo() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .tint(BlitzUI.mint)
+            Button {
+                vm.lastExportError = nil
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(BlitzUI.warning.opacity(0.1))
+    }
+
 
     private var playerColumn: some View {
         VStack(spacing: 10) {
@@ -1058,6 +1138,7 @@ struct EditorView: View {
             frameAspectSection(kind)
             switch kind {
             case .screen:
+                screenFrameSection
                 screenZoomSection
             case .camera:
                 cameraFrameSection
@@ -1127,6 +1208,31 @@ struct EditorView: View {
                     .foregroundStyle(.white.opacity(0.42))
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var screenFrameSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            BlitzUI.sectionLabel("Screen frame", icon: "macwindow")
+
+            if sceneEvents.count > 1 {
+                Text("Applies to segment \(currentEventIndex + 1)")
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.42))
+            }
+
+            CameraInspectorRow(title: "Image") {
+                Picker("Image", selection: segmentSceneBinding(\.screenContentMode, fallback: .fill)) {
+                    ForEach(CameraContentMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+            }
+            .help("Fill crops the screen to the frame. Fit shows the whole recording with background around it.")
         }
     }
 

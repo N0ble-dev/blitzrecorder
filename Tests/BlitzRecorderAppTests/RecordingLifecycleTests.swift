@@ -2046,7 +2046,10 @@ final class RecordingLifecycleTests: XCTestCase {
             source: CGRect(x: 0, y: 0, width: 160, height: 90),
             target: cameraRect,
             sourceCropAmount: settings.cameraCropAmount,
-            sourceCropPosition: settings.cameraCropPosition
+            // Export compensates for the previews' y-up crop space by negating
+            // crop-Y (see Merger.exportCropCompensated), so the sampled region
+            // mirrors vertically relative to the raw crop position.
+            sourceCropPosition: CGPoint(x: settings.cameraCropPosition.x, y: -settings.cameraCropPosition.y)
         )
         let expectedColor = try await samplePixelColors(
             in: take.cameraURL,

@@ -101,6 +101,8 @@ final class RecorderViewModel {
     var state: RecordingState = .idle
     var settings: RecordingSettings
     var detailMessage: String = ""
+    var lastExportError: String?
+    var lastExportSucceededURL: URL?
     var lastExportedURL: URL?
     var lastExportedSourceTakeURL: URL?
     var lastExportWarning: String?
@@ -620,6 +622,8 @@ final class RecorderViewModel {
     }
 
     func applySavedRecordingOutput(_ output: SavedRecordingOutput) {
+        lastExportError = nil
+        lastExportSucceededURL = output.url
         lastExportedURL = output.url
         lastExportedSourceTakeURL = output.sourceDirectory
         lastExportWarning = output.warning
@@ -627,7 +631,6 @@ final class RecorderViewModel {
         lastPostRecordingProjectOutput = nil
         refreshRecentProjects()
         refreshLastExportedProject()
-        transcriptionController.enqueueRecording(output.url)
         studioMode = lastExportedProject != nil ? .edit : .record
     }
 
@@ -656,6 +659,13 @@ final class RecorderViewModel {
 
     func applyRenderProgress(_ progress: Double) {
         renderProgress = min(1, max(0, progress))
+    }
+
+    func applyExportFailure(_ message: String?) {
+        lastExportError = message
+        if message != nil {
+            lastExportSucceededURL = nil
+        }
     }
 
     func appendAudioLevel(_ level: Float, source: CaptureSource) {

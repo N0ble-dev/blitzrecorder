@@ -6,6 +6,15 @@ This project uses GitHub Releases for downloadable macOS builds. Release tags us
 
 ## Unreleased
 
+## 0.5.0 - 2026-07-21
+
+- Fixed export framing so the exported video matches the editor preview, including camera and screen crop positions.
+- Added an on-screen aspect ratio switch (9:16 / 16:9) above the canvas.
+- Added a Fit or Fill control for the screen source in the editor, so you can show the whole recording or crop it to the frame.
+- Added clear export confirmation with the saved file path and a Reveal in Finder button, plus a readable error if an export fails.
+- Exports now save only the video file, without extra transcript files alongside it.
+- Improved export reliability when saving to external or non-Apple-formatted drives.
+
 ## 0.4.1 - 2026-07-21
 
 - Added in-app update checking through a signed, direct-download release feed.

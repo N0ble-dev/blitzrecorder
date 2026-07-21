@@ -11,6 +11,13 @@ enum Merger {
         sceneEvents: [RecordingSceneEvent] = [],
         progressHandler: (@MainActor (Double) -> Void)? = nil
     ) async throws -> URL {
+        // The editor/live previews render source crops in a y-up space
+        // (AppKit `.lowerLeft` / a geometry-flipped CALayer clip). The export
+        // composites in AVFoundation's y-down space without that flip, so the
+        // vertical crop position samples the mirror region. Flip crop-Y here so
+        // the export matches what was previewed.
+        let settings = Self.exportCropCompensated(settings)
+        let sceneEvents = sceneEvents.map(Self.exportCropCompensated)
         let fileManager = FileManager.default
         try fileManager.createDirectory(
             at: take.finalVideoURL.deletingLastPathComponent(),
@@ -144,6 +151,19 @@ enum Merger {
 
         try fileManager.moveItem(at: temporaryOutputURL, to: outputURL)
         return outputURL
+    }
+
+    private static func exportCropCompensated(_ settings: RecordingSettings) -> RecordingSettings {
+        var settings = settings
+        settings.cameraCropPosition.y = -settings.cameraCropPosition.y
+        return settings
+    }
+
+    private static func exportCropCompensated(_ event: RecordingSceneEvent) -> RecordingSceneEvent {
+        var scene = event.scene
+        scene.cameraCropPosition.y = -scene.cameraCropPosition.y
+        scene.screenCropPosition.y = -scene.screenCropPosition.y
+        return RecordingSceneEvent(time: event.time, scene: scene, transition: event.transition)
     }
 
     private static func exportWithAssetExportSession(
@@ -1403,6 +1423,7 @@ extension Merger {
                 of: source.track,
                 at: insertion.compositionStart
             )
+            videoTrack.preferredTransform = source.preferredTransform
             videoAssets[source.kind] = videoAsset
             compositedSources.append(CompositedVideoSource(
                 source: source,

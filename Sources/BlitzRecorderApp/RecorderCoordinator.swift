@@ -3,7 +3,10 @@ import AVFoundation
 import BlitzRecorderCore
 import BlitzRecorderTransport
 import Foundation
+import os
 import ScreenCaptureKit
+
+let exportLog = Logger(subsystem: "dev.blitzreels.blitzrecorder", category: "export")
 
 @MainActor
 final class RecorderCoordinator {
@@ -85,6 +88,7 @@ final class RecorderCoordinator {
     var onPostRecordingProject: ((PostRecordingProjectOutput) -> Void)?
     var onRecordingRecovery: ((RecordingRecoveryOutput) -> Void)?
     var onRenderProgress: ((Double) -> Void)?
+    var onExportFailure: ((String?) -> Void)?
     var onRuleOfThirdsOverlayChanged: ((Bool) -> Void)?
     var onSocialSafeZoneOverlayChanged: ((SocialVideoSafeZone) -> Void)?
     var onScreenCaptureConfigurationChanged: (() -> Void)?
@@ -2521,6 +2525,7 @@ final class RecorderCoordinator {
             return
         }
 
+        onExportFailure?(nil)
         Task {
             do {
                 let outputAccess = try takeFileStore.prepareOutputDirectory(settings: settings)
@@ -2533,7 +2538,9 @@ final class RecorderCoordinator {
                 onSavedRecording?(savedOutput)
                 onMessage?(savedOutput.userMessage)
             } catch {
+                exportLog.error("Final video export failed: \(error.recorderFailureDescription, privacy: .public) | \(String(describing: error), privacy: .public)")
                 onMessage?("Final video export failed: \(error.recorderFailureDescription)")
+                onExportFailure?("Final video export failed. \(error.recorderFailureDescription)")
             }
         }
     }
@@ -2549,6 +2556,7 @@ final class RecorderCoordinator {
         }
 
         onRenderProgress?(0)
+        onExportFailure?(nil)
         onMessage?("Exporting \(request.outputFormat.displayName)...")
 
         Task {
@@ -2637,7 +2645,9 @@ final class RecorderCoordinator {
                 onSavedRecording?(savedOutput)
                 onMessage?(savedOutput.userMessage)
             } catch {
+                exportLog.error("Project export failed (destination \(request.destinationURL.path, privacy: .public)): \(error.recorderFailureDescription, privacy: .public) | \(String(describing: error), privacy: .public)")
                 onMessage?("Project export failed: \(error.recorderFailureDescription)")
+                onExportFailure?(error.recorderFailureDescription)
             }
             recordingSession.finishExport()
             refreshAudioLevelMonitoring()

@@ -319,6 +319,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         return input.stringValue
     }
 
+    func applyExportFailure(_ message: String?) {
+        viewModel.applyExportFailure(message)
+    }
+
     func updateRenderProgress(_ progress: Double) {
         viewModel.applyRenderProgress(progress)
     }

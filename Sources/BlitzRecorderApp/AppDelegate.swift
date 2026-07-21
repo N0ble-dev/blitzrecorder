@@ -68,6 +68,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuActionsTarget {
         coordinator.onRenderProgress = { [weak self] progress in
             self?.windowController?.updateRenderProgress(progress)
         }
+        coordinator.onExportFailure = { [weak self] message in
+            self?.windowController?.applyExportFailure(message)
+        }
         coordinator.onRuleOfThirdsOverlayChanged = { [weak self] visible in
             self?.windowController?.syncRuleOfThirdsOverlay()
             self?.rebuildMenu()

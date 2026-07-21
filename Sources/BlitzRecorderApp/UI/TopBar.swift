@@ -5,25 +5,16 @@ struct RecordingOutputPicker: View {
     @State private var hoveredLayout: CaptureLayout?
 
     var body: some View {
-        HStack(spacing: 0) {
-            HStack(spacing: 2) {
-                ForEach(CaptureLayout.allCases, id: \.self) { layout in
-                    layoutButton(layout)
-                }
-            }
-            .padding(3)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(.white.opacity(0.06))
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(.white.opacity(0.1), lineWidth: 1)
+        HStack(spacing: 2) {
+            ForEach(CaptureLayout.allCases, id: \.self) { layout in
+                layoutButton(layout)
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .blitzGlassSurface(cornerRadius: 15)
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.quaternary)
+        )
         .help("Recording output aspect ratio")
     }
 
@@ -50,6 +41,7 @@ struct RecordingOutputPicker: View {
         )
         .disabled(vm.state != .idle)
         .opacity(vm.state == .idle || isSelected ? 1 : 0.45)
+        .animation(.easeOut(duration: 0.15), value: isSelected)
         .onHover { hovering in
             hoveredLayout = hovering ? layout : (hoveredLayout == layout ? nil : hoveredLayout)
         }
@@ -59,7 +51,7 @@ struct RecordingOutputPicker: View {
 
     private func buttonBackground(isSelected: Bool, isHovered: Bool) -> Color {
         if isSelected {
-            return Color.white
+            return BlitzUI.mint
         }
         if isHovered {
             return Color.white.opacity(0.12)

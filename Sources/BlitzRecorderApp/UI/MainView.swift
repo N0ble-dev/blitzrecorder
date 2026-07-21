@@ -69,6 +69,7 @@ struct MainView: View {
                 VStack(spacing: 12) {
                     VStack(spacing: 8) {
                         HStack {
+                            RecordingOutputPicker(vm: vm)
                             Spacer(minLength: 0)
                             CanvasSelectionButton(vm: vm)
                         }
@@ -619,7 +620,7 @@ private struct CaptureSceneCarousel: View {
             HStack(spacing: 8) {
                 workspaceHeader("Scenes", icon: "rectangle.stack")
                 Spacer(minLength: 0)
-                Text("Switch during recording")
+                Text("Tap to cut between them mid-recording")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.white.opacity(0.38))
             }
@@ -1387,7 +1388,10 @@ private struct SceneWorkspaceInspector: View {
                         set: { vm.setTargetWindowZoom(CGFloat($0)) }
                     ),
                     in: WindowZoomGeometry.minimumZoom...WindowZoomGeometry.maximumZoom,
-                    step: 0.05
+                    step: 0.05,
+                    onEditingChanged: { editing in
+                        if !editing { vm.fitCurrentScreenWindowToSlot() }
+                    }
                 )
                 .controlSize(.small)
                 .tint(BlitzUI.mint)

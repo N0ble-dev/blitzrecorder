@@ -6,6 +6,12 @@ import XCTest
 
 @MainActor
 final class RecorderCoordinatorAccessTests: XCTestCase {
+    func testOnlyRecordModeKeepsIdleCaptureResourcesActive() {
+        XCTAssertTrue(RecorderViewModel.StudioMode.record.keepsIdleCaptureResourcesActive)
+        XCTAssertFalse(RecorderViewModel.StudioMode.projects.keepsIdleCaptureResourcesActive)
+        XCTAssertFalse(RecorderViewModel.StudioMode.edit.keepsIdleCaptureResourcesActive)
+    }
+
     func testProjectsStayLockedUntilAProjectExists() throws {
         let defaults = temporaryDefaults()
         let coordinator = RecorderCoordinator(

@@ -30,6 +30,7 @@ final class RecorderCoordinator {
     private let takeFileStore = TakeFileStore()
     private let screenSourceSelection = ScreenSourceSelection()
     private let recordingSession = RecordingSession()
+    private var idleCaptureResourcesEnabled = true
     private lazy var remoteCamera = RemoteIPhoneCameraSession(
         readSettings: { [weak self] in
             self?.settings ?? RecordingSettings()
@@ -194,6 +195,7 @@ final class RecorderCoordinator {
     }
 
     func startScreenPreview(frameHandler: @escaping ScreenPreviewer.FrameHandler) async throws {
+        guard state != .idle || idleCaptureResourcesEnabled else { return }
         var previewSettings = settings
         if isEditingScreenCrop {
             previewSettings.screenCrop = nil
@@ -225,6 +227,19 @@ final class RecorderCoordinator {
     func stopCameraPreview() async {
         await cameraRecorder.stopSession()
         await cameraCutoutPreviewer.stop()
+    }
+
+    func suspendIdleCaptureResources() async {
+        idleCaptureResourcesEnabled = false
+        await stopScreenPreview()
+        await stopCameraPreview()
+        await stopAudioLevelMonitoring()
+    }
+
+    func resumeIdleAudioLevelMonitoring() async {
+        guard state == .idle else { return }
+        idleCaptureResourcesEnabled = true
+        await configureAudioLevelMonitoring()
     }
 
     func startCameraCutoutPreview(frameHandler: @escaping CameraCutoutPreviewer.FrameHandler) async throws {
@@ -1562,7 +1577,7 @@ final class RecorderCoordinator {
                         windowTitle: nil
                     ),
                     title: app.applicationName,
-                    subtitle: "Only this app's windows",
+                    subtitle: "Main window from this app",
                     systemImage: "macwindow.on.rectangle",
                     icon: Self.appIcon(
                         bundleIdentifier: app.bundleIdentifier,
@@ -2485,7 +2500,7 @@ final class RecorderCoordinator {
     }
 
     func refreshAudioLevelMonitoring() {
-        guard state == .idle else { return }
+        guard state == .idle, idleCaptureResourcesEnabled else { return }
         Task {
             await configureAudioLevelMonitoring()
         }
@@ -3042,6 +3057,10 @@ final class RecorderCoordinator {
     }
 
     private func configureAudioLevelMonitoring() async {
+        guard state != .idle || idleCaptureResourcesEnabled else {
+            await stopAudioLevelMonitoring()
+            return
+        }
         if settings.enabledSources.contains(.microphone) {
             do {
                 try microphoneLevelMonitor.start(settings: settings)
@@ -3058,6 +3077,10 @@ final class RecorderCoordinator {
                 onAudioLevel?(.systemAudio, 0)
                 return
             }
+            guard state != .idle || idleCaptureResourcesEnabled else {
+                await stopAudioLevelMonitoring()
+                return
+            }
             do {
                 try await systemAudioLevelMonitor.start(settings: settings)
             } catch {
@@ -3065,6 +3088,9 @@ final class RecorderCoordinator {
             }
         } else {
             try? await systemAudioLevelMonitor.stop()
+        }
+        if state == .idle, !idleCaptureResourcesEnabled {
+            await stopAudioLevelMonitoring()
         }
     }
 

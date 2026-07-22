@@ -25,6 +25,26 @@ enum EditorProjectRefreshPolicy {
     }
 }
 
+enum EditorPlaybackClockSelection {
+    static func index(for durations: [Double]) -> Int? {
+        guard !durations.isEmpty else { return nil }
+        var selectedIndex = 0
+        var selectedDuration = normalizedDuration(durations[0])
+        for index in durations.indices.dropFirst() {
+            let duration = normalizedDuration(durations[index])
+            if duration > selectedDuration {
+                selectedIndex = index
+                selectedDuration = duration
+            }
+        }
+        return selectedIndex
+    }
+
+    private static func normalizedDuration(_ duration: Double) -> Double {
+        duration.isFinite ? max(0, duration) : 0
+    }
+}
+
 private struct EditorPlaybackMediaSignature: Equatable {
     let version: Int
     let id: UUID
@@ -74,6 +94,7 @@ final class EditorPlaybackController {
     @ObservationIgnored private var audioInputs: [(source: CaptureSource, baseVolume: Float)] = []
     @ObservationIgnored private var audioMixTracks: [(source: CaptureSource, track: AVCompositionTrack, baseVolume: Float)] = []
     @ObservationIgnored private var audioComposition: AVMutableComposition?
+    @ObservationIgnored private var playbackClockPlayer: AVPlayer?
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var endObserver: NSObjectProtocol?
     @ObservationIgnored private var loadedProjectPath: String?
@@ -99,7 +120,7 @@ final class EditorPlaybackController {
     }
 
     private var masterPlayer: AVPlayer? {
-        audioPlayer ?? videoPlayers[.screen] ?? videoPlayers[.camera]
+        playbackClockPlayer
     }
 
     private var allPlayers: [AVPlayer] {
@@ -151,6 +172,7 @@ final class EditorPlaybackController {
             }
 
             try await buildPlayers(playback: playback)
+            playbackClockPlayer = await selectPlaybackClockPlayer()
             duration = max(0, playback.duration.seconds)
             installObservers()
 
@@ -244,6 +266,17 @@ final class EditorPlaybackController {
         let player = AVPlayer(playerItem: item)
         player.automaticallyWaitsToMinimizeStalling = false
         audioPlayer = player
+    }
+
+    private func selectPlaybackClockPlayer() async -> AVPlayer? {
+        let candidates = [audioPlayer, videoPlayers[.screen], videoPlayers[.camera]].compactMap { $0 }
+        var durations: [Double] = []
+        for player in candidates {
+            let duration = try? await player.currentItem?.asset.load(.duration)
+            durations.append(duration?.seconds ?? 0)
+        }
+        guard let index = EditorPlaybackClockSelection.index(for: durations) else { return nil }
+        return candidates[index]
     }
 
     private func audioMix() -> AVAudioMix? {
@@ -460,6 +493,7 @@ final class EditorPlaybackController {
         }
         videoPlayers = [:]
         audioPlayer = nil
+        playbackClockPlayer = nil
         audioComposition = nil
         audioMixTracks = []
     }

@@ -4,6 +4,15 @@ import CoreImage
 import QuartzCore
 import SwiftUI
 
+private struct EditorToolbarPressButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .opacity(configuration.isPressed ? 0.82 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
 private enum EditorInspectorTab: String, CaseIterable {
     case layout = "Layout"
     case canvas = "Canvas"
@@ -194,6 +203,10 @@ struct EditorView: View {
         }
     }
 
+    private func fillWindow() {
+        vm.onFillEditorWindow?()
+    }
+
     private var project: RecordingProject? {
         vm.lastExportedProject
     }
@@ -308,51 +321,45 @@ struct EditorView: View {
 
 
     private var toolbar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 0) {
             Button {
                 vm.showProjects()
             } label: {
                 Label("Projects", systemImage: "chevron.left")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.62))
-                    .padding(.horizontal, 10)
-                    .frame(height: 28)
-                    .background(Color.white.opacity(0.045), in: .rect(cornerRadius: 7))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.68))
+                    .padding(.leading, 9)
+                    .padding(.trailing, 11)
+                    .frame(height: 40)
+                    .contentShape(.rect(cornerRadius: 9))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(EditorToolbarPressButtonStyle())
             .pointingHandCursor()
             .help("Return to projects")
 
             Rectangle()
-                .fill(Color.white.opacity(0.08))
-                .frame(width: 1, height: 22)
+                .fill(Color.white.opacity(0.09))
+                .frame(width: 1, height: 18)
+                .padding(.leading, 4)
+                .padding(.trailing, 16)
 
             Text(project?.title ?? "Last recording")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(.white.opacity(0.95))
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.92))
                 .lineLimit(1)
+                .truncationMode(.middle)
+                .layoutPriority(1)
+                .allowsWindowActivationEvents(true)
+                .onTapGesture(count: 2, perform: fillWindow)
 
-            Image(systemName: "pencil")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.42))
-
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(BlitzUI.mint)
-                    .frame(width: 7, height: 7)
-                Text("Edit")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.72))
-            }
-            .padding(.horizontal, 9)
-            .frame(height: 26)
-            .background(Color.white.opacity(0.045), in: .capsule)
-
-            Spacer(minLength: 12)
+            Spacer(minLength: 24)
+                .contentShape(.rect)
+                .allowsWindowActivationEvents(true)
+                .onTapGesture(count: 2, perform: fillWindow)
 
             exportButton
         }
-        .frame(height: 42)
+        .frame(height: 44)
     }
 
     private func sourceResolution(for project: RecordingProject) -> OutputResolution {
@@ -363,18 +370,20 @@ struct EditorView: View {
         Button {
             isExportPopoverPresented.toggle()
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 7) {
                 Image(systemName: vm.state == .finishing ? "hourglass" : "square.and.arrow.up")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: 12.5, weight: .semibold))
                 Text(vm.state == .finishing ? "Exporting" : "Export")
-                    .font(.system(size: 13, weight: .heavy))
+                    .font(.system(size: 13, weight: .bold))
             }
-            .foregroundStyle(.black.opacity(0.84))
-            .padding(.horizontal, 18)
+            .foregroundStyle(.black.opacity(0.82))
+            .padding(.leading, 15)
+            .padding(.trailing, 17)
             .frame(height: 40)
+            .background(BlitzUI.mint, in: .rect(cornerRadius: 10))
+            .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
         }
-        .buttonStyle(.plain)
-        .background(BlitzUI.mint, in: .rect(cornerRadius: 9))
+        .buttonStyle(EditorToolbarPressButtonStyle())
         .pointingHandCursor()
         .disabled(project == nil || vm.state != .idle)
         .opacity(project == nil ? 0.45 : 1)

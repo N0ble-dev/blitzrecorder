@@ -1353,7 +1353,7 @@ private struct SceneWorkspaceInspector: View {
 
             if sourceKind == .application || vm.canUseAppOnlyCapture {
                 screenCaptureAreaButton(ScreenCaptureAreaButtonRequest(
-                    title: "App only",
+                    title: "Main window",
                     isSelected: sourceKind == .application,
                     action: { vm.setAppOnlyCapture(true) }
                 ))
@@ -1565,7 +1565,7 @@ private struct SceneWorkspaceInspector: View {
     private var selectedScreenSourceKindLabel: String {
         switch vm.settings.screenSourceBinding?.kind {
         case .application:
-            return "Application capture"
+            return "App window capture"
         case .window:
             return "Window capture"
         case .display, nil:

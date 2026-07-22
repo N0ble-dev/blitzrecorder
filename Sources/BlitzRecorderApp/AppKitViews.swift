@@ -1919,12 +1919,19 @@ private final class SafeZoneOverlayView: NSView {
     }
 }
 
+enum ScreenPreviewMessageLayout {
+    static func maximumLabelWidth(for containerWidth: CGFloat) -> CGFloat {
+        max(0, containerWidth - 28)
+    }
+}
+
 @MainActor
 final class ScreenPreviewView: NSView {
     private let placeholderLayer = CALayer()
     private let imageLayer = CALayer()
     private var sampleBufferLayer: AVSampleBufferDisplayLayer?
     private let label = NSTextField(labelWithString: "SCREEN PREVIEW")
+    private var labelMaximumWidthConstraint: NSLayoutConstraint?
 
     var hasPreviewContent: Bool { placeholderLayer.isHidden }
 
@@ -1957,10 +1964,14 @@ final class ScreenPreviewView: NSView {
         label.layer?.masksToBounds = true
         addSubview(label)
 
+        let labelMaximumWidthConstraint = label.widthAnchor.constraint(
+            lessThanOrEqualToConstant: ScreenPreviewMessageLayout.maximumLabelWidth(for: bounds.width)
+        )
+        self.labelMaximumWidthConstraint = labelMaximumWidthConstraint
         NSLayoutConstraint.activate([
             label.centerXAnchor.constraint(equalTo: centerXAnchor),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            label.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -28)
+            labelMaximumWidthConstraint
         ])
     }
 
@@ -1970,6 +1981,7 @@ final class ScreenPreviewView: NSView {
 
     override func layout() {
         super.layout()
+        labelMaximumWidthConstraint?.constant = ScreenPreviewMessageLayout.maximumLabelWidth(for: bounds.width)
         syncLayerFrames()
     }
 

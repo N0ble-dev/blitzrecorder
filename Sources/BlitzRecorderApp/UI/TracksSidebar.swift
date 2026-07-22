@@ -591,7 +591,7 @@ private struct ScreenSourceInspector: View {
         }
         switch vm.settings.screenSourceBinding?.kind {
         case .application:
-            return "Application capture"
+            return "App window capture"
         case .window:
             return "Window capture"
         case .display, nil:

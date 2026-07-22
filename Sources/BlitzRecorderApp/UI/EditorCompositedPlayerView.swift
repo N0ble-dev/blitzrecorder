@@ -3,6 +3,17 @@ import AVFoundation
 import QuartzCore
 import SwiftUI
 
+struct EditorDisplayLinkRequest {
+    let isAttachedToWindow: Bool
+    let isPlaying: Bool
+}
+
+enum EditorDisplayLinkPolicy {
+    static func shouldRun(_ request: EditorDisplayLinkRequest) -> Bool {
+        request.isAttachedToWindow && request.isPlaying
+    }
+}
+
 @MainActor
 struct EditorCompositedPlayer: NSViewRepresentable {
     let controller: EditorPlaybackController
@@ -21,6 +32,7 @@ struct EditorCompositedPlayer: NSViewRepresentable {
         nsView.previewSceneRevision = previewSceneRevision
         nsView.configure(renderSize: renderSize)
         nsView.refresh()
+        nsView.synchronizeDisplayLink()
     }
 }
 
@@ -84,13 +96,26 @@ final class EditorCompositedPlayerView: NSView {
         displayLink = nil
     }
 
+    func synchronizeDisplayLink() {
+        let shouldRun = EditorDisplayLinkPolicy.shouldRun(EditorDisplayLinkRequest(
+            isAttachedToWindow: window != nil,
+            isPlaying: controller?.isPlaying == true
+        ))
+        if shouldRun {
+            startDisplayLink()
+        } else {
+            stopDisplayLink()
+        }
+    }
+
     @objc private func tick() {
         refresh()
+        synchronizeDisplayLink()
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil { startDisplayLink() } else { stopDisplayLink() }
+        synchronizeDisplayLink()
     }
 
     override func layout() {

@@ -4,6 +4,12 @@ import XCTest
 
 @MainActor
 final class PreviewStageViewTests: XCTestCase {
+    func testScreenPreviewMessageWidthNeverBecomesNegative() {
+        XCTAssertEqual(ScreenPreviewMessageLayout.maximumLabelWidth(for: 0), 0)
+        XCTAssertEqual(ScreenPreviewMessageLayout.maximumLabelWidth(for: 20), 0)
+        XCTAssertEqual(ScreenPreviewMessageLayout.maximumLabelWidth(for: 100), 72)
+    }
+
     func testCameraUnavailableMessageWrapsInsideNarrowSceneSlot() {
         let preview = CameraPreviewView()
         preview.frame = CGRect(x: 0, y: 0, width: 90, height: 220)

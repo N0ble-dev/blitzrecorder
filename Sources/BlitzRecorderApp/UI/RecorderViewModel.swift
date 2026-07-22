@@ -109,8 +109,19 @@ final class RecorderViewModel {
     var lastRecoveryOutput: RecordingRecoveryOutput?
     var lastPostRecordingProjectOutput: PostRecordingProjectOutput?
     var lastExportedProject: RecordingProject?
-    enum StudioMode { case record, projects, edit }
-    var studioMode: StudioMode = .record
+    enum StudioMode: Equatable {
+        case record
+        case projects
+        case edit
+
+        var keepsIdleCaptureResourcesActive: Bool { self == .record }
+    }
+    var studioMode: StudioMode = .record {
+        didSet {
+            guard oldValue != studioMode else { return }
+            onStudioModeChanged?(studioMode)
+        }
+    }
     var recentProjects: [RecordingProjectHistory.Entry] = []
     var projectLibraryError: String?
 
@@ -136,6 +147,8 @@ final class RecorderViewModel {
 
     @ObservationIgnored var onPresentSettings: ((SettingsPane?) -> Void)?
     @ObservationIgnored var onProjectOpened: (() -> Void)?
+    @ObservationIgnored var onFillEditorWindow: (() -> Void)?
+    @ObservationIgnored var onStudioModeChanged: ((StudioMode) -> Void)?
     var inspectorSelection: RecorderInspectorSelection = .canvas
     var isCameraCropModeEnabled = false
     var isScreenCropModeEnabled = false
@@ -1130,6 +1143,14 @@ final class RecorderViewModel {
     private func cancelScheduledTargetWindowFit() {
         targetWindowZoomTask?.cancel()
         targetWindowZoomTask = nil
+    }
+
+    var hasScheduledTargetWindowFit: Bool {
+        targetWindowZoomTask != nil
+    }
+
+    func prepareForWindowClose() {
+        cancelScheduledTargetWindowFit()
     }
 
     private func scheduledTargetWindowFitContext() -> ScheduledTargetWindowFitContext {

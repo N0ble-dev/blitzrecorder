@@ -52,31 +52,19 @@ enum ScreenCaptureGeometry {
                 ?? display(from: content.displays, settings: settings) else {
                 throw RecorderError.noDisplay
             }
-            let filter = SCContentFilter(display: display, including: [application], exceptingWindows: [])
-            let applicationRect = applicationSourceRect(
+            guard let window = primaryWindow(
                 for: application,
                 on: display,
                 in: content
-            )
-            let sourceRect = applicationRect.map {
-                croppedSourceRect(request: ScreenSourceCropRequest(
-                    sourceRect: $0,
-                    normalizedCrop: effectiveCrop(for: settings)
-                ))
+            ) else {
+                throw RecorderError.screenSourceUnavailable(binding?.displayName ?? "Selected app")
             }
-            let sourceAspectRatio = sourceRect.map { $0.width / max(1, $0.height) }
-                ?? pickedContentAspectRatio(for: filter)
+            let filter = SCContentFilter(desktopIndependentWindow: window)
             return ResolvedScreenSource(
                 filter: filter,
-                geometry: ScreenSourceGeometry(
-                    usesPickedContent: true,
-                    fillsSceneFrame: true,
-                    selectedDisplayID: String(display.displayID),
-                    normalizedCrop: nil,
-                    sourceAspectRatio: sourceAspectRatio
-                ),
-                sourceRect: sourceRect,
-                display: display
+                geometry: screenSourceGeometry(for: settings, pickedFilter: filter),
+                sourceRect: nil,
+                display: nil
             )
 
         case .display, nil:
@@ -512,22 +500,11 @@ enum ScreenCaptureGeometry {
         }
 
         let targetDisplay = display(from: content.displays, id: binding.displayID)
-        let displayFrame = targetDisplay?.frame
-        let appWindows = content.windows.filter { window in
-            window.isOnScreen
-                && window.frame.width > 0
-                && window.frame.height > 0
-                && windowBelongs(window, to: application)
-                && displayFrame.map { !window.frame.intersection($0).isNull } != false
-        }
-
-        let target = appWindows.max { lhs, rhs in
-            let lhsScore = applicationWindowScore(lhs, displayFrame: displayFrame)
-            let rhsScore = applicationWindowScore(rhs, displayFrame: displayFrame)
-            return lhsScore < rhsScore
-        }
-
-        guard let window = target,
+        guard let window = primaryWindow(
+            for: application,
+            on: targetDisplay,
+            in: content
+        ),
               let pid = window.owningApplication?.processID else {
             return nil
         }
@@ -605,32 +582,25 @@ enum ScreenCaptureGeometry {
         }
     }
 
-    private static func applicationSourceRect(
+    private static func primaryWindow(
         for application: SCRunningApplication,
-        on display: SCDisplay,
+        on display: SCDisplay?,
         in content: SCShareableContent
-    ) -> CGRect? {
+    ) -> SCWindow? {
+        let displayFrame = display?.frame
         let appWindows = content.windows
             .filter { window in
                 window.isOnScreen
                     && window.frame.width > 0
                     && window.frame.height > 0
                     && windowBelongs(window, to: application)
-                    && !window.frame.intersection(display.frame).isNull
+                    && displayFrame.map { !window.frame.intersection($0).isNull } != false
             }
-            .map(\.frame)
-
-        guard let union = appWindows.reduce(nil, { partial, frame -> CGRect? in
-            partial.map { $0.union(frame) } ?? frame
-        }) else {
-            return nil
+        return appWindows.max { lhs, rhs in
+            let lhsScore = applicationWindowScore(lhs, displayFrame: displayFrame)
+            let rhsScore = applicationWindowScore(rhs, displayFrame: displayFrame)
+            return lhsScore < rhsScore
         }
-
-        return displayLocalSourceRect(
-            for: union,
-            displayFrame: display.frame,
-            displayPixelSize: CGSize(width: display.width, height: display.height)
-        )
     }
 
     private static func windowBelongs(_ window: SCWindow, to application: SCRunningApplication) -> Bool {

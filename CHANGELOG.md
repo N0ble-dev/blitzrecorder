@@ -6,6 +6,14 @@ This project uses GitHub Releases for downloadable macOS builds. Release tags us
 
 ## Unreleased
 
+## 0.6.0 - 2026-07-23
+
+- App capture now records the selected app's main window instead of combining all of its windows.
+- Screen, camera, and audio preview resources now pause outside Record mode and stop when the studio window closes.
+- Editor playback now follows the longest available media source, preventing short audio tracks from ending playback early.
+- Reduced idle editor work by running the display refresh link only during playback.
+- Refined the editor toolbar, added double-click window filling, and improved narrow preview status messages.
+
 ## 0.5.0 - 2026-07-21
 
 - Fixed export framing so the exported video matches the editor preview, including camera and screen crop positions.

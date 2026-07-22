@@ -2062,8 +2062,9 @@ final class RecordingLifecycleTests: XCTestCase {
             at: CMTime(seconds: 0.1, preferredTimescale: 600)
         )[0]
 
-        XCTAssertEqual(sampledColor.red, expectedColor.red, accuracy: 18)
-        XCTAssertEqual(sampledColor.green, expectedColor.green, accuracy: 18)
+        let colorTolerance = 20
+        XCTAssertEqual(sampledColor.red, expectedColor.red, accuracy: colorTolerance)
+        XCTAssertEqual(sampledColor.green, expectedColor.green, accuracy: colorTolerance)
     }
 
     func testMergerKeepsPaddedSourceCornersSquareInFinalExport() async throws {

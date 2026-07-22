@@ -304,7 +304,7 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
         XCTAssertNil(viewModel.idleStatusMessage)
     }
 
-    func testViewModelOpensEditorForSavedOutputWithProject() throws {
+    func testViewModelKeepsRecorderOpenForSavedOutputWithProject() throws {
         let defaults = temporaryDefaults()
         let coordinator = RecorderCoordinator(
             accessController: AccessController(defaults: defaults),
@@ -322,8 +322,8 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
         )
 
         XCTAssertNotNil(viewModel.lastExportedProject)
-        guard case .edit = viewModel.studioMode else {
-            XCTFail("Expected saved project output to open Edit")
+        guard case .record = viewModel.studioMode else {
+            XCTFail("Expected saved project output to keep Record open")
             return
         }
     }

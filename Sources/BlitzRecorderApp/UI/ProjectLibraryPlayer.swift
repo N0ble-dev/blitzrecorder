@@ -2,6 +2,50 @@ import AppKit
 import Foundation
 import SwiftUI
 
+struct ProjectLibraryPlayerSizeRequest {
+    let contentSize: CGSize
+    let maximumSize: CGSize
+}
+
+struct ProjectLibraryPlayerLayout {
+    let videoSize: CGSize
+    let transportWidth: CGFloat
+}
+
+enum ProjectLibraryPlayerSizing {
+    static func layout(_ request: ProjectLibraryPlayerSizeRequest) -> ProjectLibraryPlayerLayout {
+        guard request.contentSize.width > 0,
+              request.contentSize.height > 0,
+              request.maximumSize.width > 0,
+              request.maximumSize.height > 0 else {
+            return ProjectLibraryPlayerLayout(videoSize: .zero, transportWidth: 0)
+        }
+        let scale = min(
+            request.maximumSize.width / request.contentSize.width,
+            request.maximumSize.height / request.contentSize.height
+        )
+        return ProjectLibraryPlayerLayout(
+            videoSize: CGSize(
+                width: request.contentSize.width * scale,
+                height: request.contentSize.height * scale
+            ),
+            transportWidth: request.maximumSize.width
+        )
+    }
+}
+
+struct ProjectLibraryPlaybackReloadRequest {
+    let selectedProjectPath: String
+    let loadedProjectPath: String?
+    let hasActivePlayback: Bool
+}
+
+enum ProjectLibraryPlaybackReloadPolicy {
+    static func shouldReload(_ request: ProjectLibraryPlaybackReloadRequest) -> Bool {
+        !request.hasActivePlayback || request.selectedProjectPath != request.loadedProjectPath
+    }
+}
+
 enum ProjectSpeechWaveform {
     struct Request {
         let segments: [RecordingTranscript.Segment]
@@ -63,7 +107,40 @@ struct ProjectLibraryPlayerSurface: View {
         isCurrentProject && controller.isReady
     }
 
+    private var playerLayout: ProjectLibraryPlayerLayout {
+        let contentSize: CGSize
+        if controller.renderSize.width > 0, controller.renderSize.height > 0 {
+            contentSize = controller.renderSize
+        } else if let fallbackThumbnail,
+                  fallbackThumbnail.size.width > 0,
+                  fallbackThumbnail.size.height > 0 {
+            contentSize = fallbackThumbnail.size
+        } else {
+            contentSize = CGSize(width: 16, height: 9)
+        }
+        return ProjectLibraryPlayerSizing.layout(.init(
+            contentSize: contentSize,
+            maximumSize: CGSize(width: 720, height: 420)
+        ))
+    }
+
     var body: some View {
+        VStack(spacing: 12) {
+            videoSurface
+
+            if isPlaybackReady {
+                transportControls
+                    .frame(width: playerLayout.transportWidth)
+                    .transition(.opacity)
+            }
+        }
+        .frame(width: playerLayout.transportWidth)
+        .animation(.easeOut(duration: 0.18), value: isPlaybackReady)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Project playback")
+    }
+
+    private var videoSurface: some View {
         ZStack {
             Color.black
 
@@ -80,25 +157,14 @@ struct ProjectLibraryPlayerSurface: View {
                 .transition(.opacity)
             }
 
-            if isPlaybackReady {
-                VStack {
-                    Spacer(minLength: 0)
-                    transportControls
-                }
-                .padding(14)
-                .transition(.opacity)
-            }
         }
-        .frame(width: 720, height: 405)
+        .frame(width: playerLayout.videoSize.width, height: playerLayout.videoSize.height)
         .clipShape(.rect(cornerRadius: 16))
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(.white.opacity(0.10), lineWidth: 1)
         }
         .shadow(color: .black.opacity(0.44), radius: 28, y: 14)
-        .animation(.easeOut(duration: 0.18), value: isPlaybackReady)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Project playback")
     }
 
     @ViewBuilder

@@ -631,7 +631,7 @@ final class RecorderViewModel {
         lastPostRecordingProjectOutput = nil
         refreshRecentProjects()
         refreshLastExportedProject()
-        studioMode = lastExportedProject != nil ? .edit : .record
+        studioMode = .record
     }
 
     func applyPostRecordingProjectOutput(_ output: PostRecordingProjectOutput) {
@@ -643,7 +643,7 @@ final class RecorderViewModel {
         refreshRecentProjects()
         refreshLastExportedProject()
         transcriptionController.enqueueProject(output.projectURL)
-        studioMode = lastExportedProject != nil ? .edit : .record
+        studioMode = .record
     }
 
     func applyRecoveryOutput(_ output: RecordingRecoveryOutput) {

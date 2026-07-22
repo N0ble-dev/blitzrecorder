@@ -10,6 +10,33 @@ struct ProjectTranscriptTitleRequest {
     let transcript: String
 }
 
+enum ProjectLibrarySymbols {
+    static let editRecording = "scissors"
+    static let media = "film.stack"
+}
+
+enum ProjectLibraryDetailTab: CaseIterable {
+    case overview
+    case transcript
+    case media
+
+    var title: String {
+        switch self {
+        case .overview: return "Overview"
+        case .transcript: return "Transcript"
+        case .media: return "Media"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .overview: return "rectangle.on.rectangle"
+        case .transcript: return "text.alignleft"
+        case .media: return ProjectLibrarySymbols.media
+        }
+    }
+}
+
 struct StudioSectionTabs: View {
     @Bindable var vm: RecorderViewModel
 
@@ -83,23 +110,9 @@ struct StudioSectionTabs: View {
 }
 
 struct ProjectLibraryView: View {
-    private enum ProjectDetailTab: String, CaseIterable {
-        case overview = "Overview"
-        case transcript = "Transcript"
-        case files = "Files"
-
-        var systemImage: String {
-            switch self {
-            case .overview: return "rectangle.on.rectangle"
-            case .transcript: return "text.alignleft"
-            case .files: return "folder"
-            }
-        }
-    }
-
     @Bindable var vm: RecorderViewModel
     @State private var selectedProjectIDs: Set<UUID> = []
-    @State private var selectedDetailTab: ProjectDetailTab = .overview
+    @State private var selectedDetailTab: ProjectLibraryDetailTab = .overview
     @State private var searchText = ""
     @State private var openingProjectID: UUID?
     @State private var projectsPendingDeletion: [RecordingProjectHistory.Entry] = []
@@ -111,6 +124,7 @@ struct ProjectLibraryView: View {
     @State private var projectPlayback = EditorPlaybackController()
     @State private var projectWaveformLibrary = EditorMediaLibrary()
     @State private var playbackProjectID: UUID?
+    @State private var playbackProjectPath: String?
     @State private var playbackWaveformSamples: [Float] = []
     @State private var playbackLoadError: String?
 
@@ -143,7 +157,9 @@ struct ProjectLibraryView: View {
     }
 
     private struct FileLocationRequest {
+        let systemImage: String
         let title: String
+        let detail: String
         let path: String
     }
 
@@ -356,7 +372,7 @@ struct ProjectLibraryView: View {
             Button {
                 vm.openProject(project)
             } label: {
-                Label("Open in Editor", systemImage: "slider.horizontal.3")
+                Label("Open in Editor", systemImage: ProjectLibrarySymbols.editRecording)
             }
 
             Button {
@@ -422,11 +438,11 @@ struct ProjectLibraryView: View {
 
     private var projectDetailTabBar: some View {
         HStack(spacing: 4) {
-            ForEach(ProjectDetailTab.allCases, id: \.self) { tab in
+            ForEach(ProjectLibraryDetailTab.allCases, id: \.self) { tab in
                 Button {
                     selectedDetailTab = tab
                 } label: {
-                    Label(tab.rawValue, systemImage: tab.systemImage)
+                    Label(tab.title, systemImage: tab.systemImage)
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(
                             selectedDetailTab == tab
@@ -465,8 +481,8 @@ struct ProjectLibraryView: View {
             }
         case .transcript:
             inlineTranscript(project)
-        case .files:
-            projectFiles(project)
+        case .media:
+            projectMedia(project)
         }
     }
 
@@ -525,13 +541,17 @@ struct ProjectLibraryView: View {
         _ project: RecordingProjectHistory.Entry
     ) -> some View {
         let metadata = metadataByProjectID[project.id] ?? .empty
-        return ProjectLibraryPlayerSurface(
-            controller: projectPlayback,
-            isCurrentProject: playbackProjectID == project.id,
-            fallbackThumbnail: metadata.thumbnail,
-            waveformSamples: playbackWaveformSamples,
-            loadError: playbackLoadError ?? projectPlayback.loadError
-        )
+        return HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            ProjectLibraryPlayerSurface(
+                controller: projectPlayback,
+                isCurrentProject: playbackProjectID == project.id,
+                fallbackThumbnail: metadata.thumbnail,
+                waveformSamples: playbackWaveformSamples,
+                loadError: playbackLoadError ?? projectPlayback.loadError
+            )
+            Spacer(minLength: 0)
+        }
     }
 
     private func detailHeader(
@@ -568,7 +588,7 @@ struct ProjectLibraryView: View {
         return HStack(spacing: 8) {
             ProjectLibraryActionButton(configuration: .init(
                 title: "Edit recording",
-                systemImage: "slider.horizontal.3",
+                systemImage: ProjectLibrarySymbols.editRecording,
                 tone: .primary,
                 isLoading: isOpening,
                 action: {
@@ -582,10 +602,10 @@ struct ProjectLibraryView: View {
             ))
 
             ProjectLibraryIconActionButton(configuration: .init(
-                title: "View files",
-                systemImage: "folder",
+                title: "View recording media",
+                systemImage: ProjectLibrarySymbols.media,
                 tone: .secondary,
-                action: { selectedDetailTab = .files }
+                action: { selectedDetailTab = .media }
             ))
 
             ProjectLibraryIconActionButton(configuration: .init(
@@ -826,32 +846,44 @@ struct ProjectLibraryView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func projectFiles(
+    private func projectMedia(
         _ project: RecordingProjectHistory.Entry
     ) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Project files")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.82))
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Recording media")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.92))
+
+                Text("Original captures, edit data, and finished exports for this recording.")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.44))
+            }
 
             fileLocation(FileLocationRequest(
-                title: "Source folder",
+                systemImage: "tray.full",
+                title: "Original captures",
+                detail: "Screen, camera, microphone, and system audio recorded for this take.",
                 path: project.takeDirectoryPath
             ))
             fileLocation(FileLocationRequest(
-                title: "Project file",
+                systemImage: "doc.text",
+                title: "Edit project",
+                detail: "Scene layout, timing, and editing settings used by BlitzRecorder.",
                 path: project.projectPath
             ))
 
             if let finalVideoPath = project.finalVideoPath {
                 fileLocation(FileLocationRequest(
+                    systemImage: "film",
                     title: "Exported video",
+                    detail: "Finished video ready to play, share, or publish.",
                     path: finalVideoPath
                 ))
             }
 
             ProjectLibraryActionButton(configuration: .init(
-                title: "Show in Finder",
+                title: "Open media folder",
                 systemImage: "folder",
                 tone: .secondary,
                 isLoading: false,
@@ -863,20 +895,49 @@ struct ProjectLibraryView: View {
     private func fileLocation(
         _ request: FileLocationRequest
     ) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(request.title)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.42))
-            Text(request.path)
-                .font(.system(size: 10.5, weight: .regular, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.38))
-                .textSelection(.enabled)
-                .lineLimit(2)
-                .truncationMode(.middle)
+        HStack(alignment: .top, spacing: 13) {
+            Image(systemName: request.systemImage)
+                .font(.system(size: 15, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(BlitzUI.mint)
+                .frame(width: 40, height: 40)
+                .background(BlitzUI.mint.opacity(0.09), in: .rect(cornerRadius: 10))
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(request.title)
+                        .font(.system(size: 12.5, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.86))
+
+                    Spacer(minLength: 0)
+
+                    Text(URL(fileURLWithPath: request.path).lastPathComponent)
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.44))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Text(request.detail)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.50))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(request.path)
+                    .font(.system(size: 9.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.28))
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
         }
-        .padding(12)
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.white.opacity(0.035), in: .rect(cornerRadius: 10))
+        .background(.white.opacity(0.035), in: .rect(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(.white.opacity(0.065), lineWidth: 1)
+        }
     }
 
     private var detailEmptyState: some View {
@@ -1146,15 +1207,20 @@ struct ProjectLibraryView: View {
     }
 
     private func loadSelectedPlayback() async {
+        guard let project = selectedProject else {
+            return
+        }
+        guard ProjectLibraryPlaybackReloadPolicy.shouldReload(.init(
+            selectedProjectPath: project.projectPath,
+            loadedProjectPath: playbackProjectPath,
+            hasActivePlayback: projectPlayback.isReady
+        )) else { return }
+
         playbackProjectID = nil
+        playbackProjectPath = nil
         playbackWaveformSamples = []
         projectPlayback.teardown()
         playbackLoadError = nil
-
-        guard selectedDetailTab == .overview,
-              let project = selectedProject else {
-            return
-        }
 
         do {
             let recordingProject = try TakeFileStore().loadRecordingProject(
@@ -1171,6 +1237,7 @@ struct ProjectLibraryView: View {
                 return
             }
             playbackProjectID = project.id
+            playbackProjectPath = project.projectPath
 
             if let transcript = projectTranscript(recordingProject) {
                 playbackWaveformSamples = ProjectSpeechWaveform.samples(.init(
@@ -1237,11 +1304,11 @@ struct ProjectLibraryView: View {
     private var transcriptTaskID: String {
         guard let project = selectedProject else { return "none" }
         let status = vm.transcriptionController.status(for: project)
-        return "\(selectedDetailTab.rawValue)-\(project.id.uuidString)-\(status.label)"
+        return "\(selectedDetailTab.title)-\(project.id.uuidString)-\(status.label)"
     }
 
     private var playbackTaskID: String {
-        "\(selectedDetailTab.rawValue)-\(selectedProject?.projectPath ?? "none")"
+        selectedProject?.projectPath ?? "none"
     }
 
     private var projectCountLabel: String {

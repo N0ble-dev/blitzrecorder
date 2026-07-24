@@ -69,6 +69,13 @@ final class RecordingSceneTimelineTests: XCTestCase {
         XCTAssertTrue(RecordingSceneTimeline.requiresCanvasAwareRendering(settings: settings, sceneEvents: []))
     }
 
+    func testScreenFitRequiresCanvasAwareRendering() {
+        var settings = RecordingSettings()
+        settings.screenContentMode = .fit
+
+        XCTAssertTrue(RecordingSceneTimeline.requiresCanvasAwareRendering(settings: settings, sceneEvents: []))
+    }
+
     func testSceneAtInterpolatesDuringTransition() {
         var initialSettings = RecordingSettings()
         initialSettings.sceneLayout.screenFrame = CGRect(x: 0, y: 0.5, width: 1, height: 0.5)

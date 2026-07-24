@@ -26,7 +26,10 @@ enum OptimizedCompositionExporter {
         let videoOutput = AVAssetReaderVideoCompositionOutput(
             videoTracks: videoTracks,
             videoSettings: [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+                kCVPixelBufferPixelFormatTypeKey as String:
+                    kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                kCVPixelBufferMetalCompatibilityKey as String: true,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [:]
             ]
         )
         videoOutput.videoComposition = videoComposition
@@ -41,19 +44,33 @@ enum OptimizedCompositionExporter {
 
         let width = Int(renderSize.width.rounded())
         let height = Int(renderSize.height.rounded())
+        let hardwareEncoderStatus = HardwareVideoEncoderSupport.probe(
+            HardwareVideoEncoderProbeRequest(
+                width: width,
+                height: height,
+                codecType: kCMVideoCodecType_HEVC
+            )
+        )
+        var videoSettings: [String: Any] = [
+            AVVideoCodecKey: AVVideoCodecType.hevc,
+            AVVideoWidthKey: width,
+            AVVideoHeightKey: height,
+            AVVideoCompressionPropertiesKey: [
+                AVVideoAverageBitRateKey: settings.finalVideoBitrate,
+                AVVideoExpectedSourceFrameRateKey: settings.framesPerSecond,
+                AVVideoAllowFrameReorderingKey: false,
+                AVVideoProfileLevelKey: kVTProfileLevel_HEVC_Main_AutoLevel as String,
+                kVTCompressionPropertyKey_RealTime as String: false
+            ]
+        ]
+        if hardwareEncoderStatus.isAvailable {
+            videoSettings[AVVideoEncoderSpecificationKey] = [
+                kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder as String: true
+            ]
+        }
         let videoInput = AVAssetWriterInput(
             mediaType: .video,
-            outputSettings: [
-                AVVideoCodecKey: AVVideoCodecType.hevc,
-                AVVideoWidthKey: width,
-                AVVideoHeightKey: height,
-                AVVideoCompressionPropertiesKey: [
-                    AVVideoAverageBitRateKey: settings.finalVideoBitrate,
-                    AVVideoExpectedSourceFrameRateKey: settings.framesPerSecond,
-                    AVVideoAllowFrameReorderingKey: false,
-                    AVVideoProfileLevelKey: kVTProfileLevel_HEVC_Main_AutoLevel as String
-                ]
-            ]
+            outputSettings: videoSettings
         )
         guard writer.canAdd(videoInput) else {
             throw RecorderError.writerNotReady
@@ -101,6 +118,13 @@ enum OptimizedCompositionExporter {
             throw writer.error ?? reader.error ?? RecorderError.writerNotReady
         }
         writer.startSession(atSourceTime: .zero)
+        let performanceMonitor = ExportPerformanceMonitor(
+            configuration: ExportPerformanceConfiguration(
+                renderSize: renderSize,
+                framesPerSecond: settings.framesPerSecond,
+                hardwareEncoderStatus: hardwareEncoderStatus
+            )
+        )
 
         try await run(
             reader: reader,
@@ -110,8 +134,10 @@ enum OptimizedCompositionExporter {
             audioOutput: audioOutput,
             audioInput: audioInput,
             duration: duration,
+            performanceMonitor: performanceMonitor,
             progressHandler: progressHandler
         )
+        _ = performanceMonitor.finish(outputURL: outputURL)
     }
 
     private static func run(
@@ -122,6 +148,7 @@ enum OptimizedCompositionExporter {
         audioOutput: AVAssetReaderOutput?,
         audioInput: AVAssetWriterInput?,
         duration: CMTime,
+        performanceMonitor: ExportPerformanceMonitor,
         progressHandler: (@MainActor (Double) -> Void)?
     ) async throws {
         try await withCheckedThrowingContinuation { continuation in
@@ -129,6 +156,7 @@ enum OptimizedCompositionExporter {
                 reader: reader,
                 writer: writer,
                 hasAudio: audioOutput != nil,
+                performanceMonitor: performanceMonitor,
                 continuation: continuation
             )
             let videoPump = ExportSamplePump(
@@ -137,6 +165,7 @@ enum OptimizedCompositionExporter {
                 writer: writer,
                 state: state,
                 durationSeconds: max(0.001, duration.seconds),
+                performanceMonitor: performanceMonitor,
                 progressHandler: progressHandler
             )
 
@@ -151,6 +180,7 @@ enum OptimizedCompositionExporter {
                 writer: writer,
                 state: state,
                 durationSeconds: max(0.001, duration.seconds),
+                performanceMonitor: performanceMonitor,
                 progressHandler: nil
             )
             audioInput.requestMediaDataWhenReady(on: DispatchQueue(label: "blitzrecorder.optimized-export.audio")) {
@@ -166,6 +196,7 @@ private final class ExportSamplePump: @unchecked Sendable {
     private let writer: AVAssetWriter
     private let state: ExportState
     private let durationSeconds: Double
+    private let performanceMonitor: ExportPerformanceMonitor?
     private let progressHandler: (@MainActor (Double) -> Void)?
 
     init(
@@ -174,6 +205,7 @@ private final class ExportSamplePump: @unchecked Sendable {
         writer: AVAssetWriter,
         state: ExportState,
         durationSeconds: Double,
+        performanceMonitor: ExportPerformanceMonitor?,
         progressHandler: (@MainActor (Double) -> Void)?
     ) {
         self.output = output
@@ -181,22 +213,34 @@ private final class ExportSamplePump: @unchecked Sendable {
         self.writer = writer
         self.state = state
         self.durationSeconds = durationSeconds
+        self.performanceMonitor = performanceMonitor
         self.progressHandler = progressHandler
     }
 
     func pumpVideo() {
         while input.isReadyForMoreMediaData {
             guard !state.isCompleted else { return }
-            guard let sampleBuffer = output.copyNextSampleBuffer() else {
+            let readStartedAt = ProcessInfo.processInfo.systemUptime
+            let nextSampleBuffer = output.copyNextSampleBuffer()
+            performanceMonitor?.recordVideoRead(
+                duration: ProcessInfo.processInfo.systemUptime - readStartedAt
+            )
+            guard let sampleBuffer = nextSampleBuffer else {
                 input.markAsFinished()
                 state.markVideoFinished()
                 return
             }
-            if !input.append(sampleBuffer) {
+            let appendStartedAt = ProcessInfo.processInfo.systemUptime
+            let appended = input.append(sampleBuffer)
+            performanceMonitor?.recordVideoAppend(
+                duration: ProcessInfo.processInfo.systemUptime - appendStartedAt
+            )
+            if !appended {
                 state.fail(writer.error ?? RecorderError.mediaWriteFailed("Final video writer rejected a video frame."))
                 return
             }
             let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            performanceMonitor?.didWriteVideoFrame(at: presentationTime)
             if presentationTime.isValid {
                 let progress = min(0.99, max(0, presentationTime.seconds / durationSeconds))
                 Task { @MainActor in
@@ -209,12 +253,22 @@ private final class ExportSamplePump: @unchecked Sendable {
     func pumpAudio() {
         while input.isReadyForMoreMediaData {
             guard !state.isCompleted else { return }
-            guard let sampleBuffer = output.copyNextSampleBuffer() else {
+            let readStartedAt = ProcessInfo.processInfo.systemUptime
+            let nextSampleBuffer = output.copyNextSampleBuffer()
+            performanceMonitor?.recordAudioRead(
+                duration: ProcessInfo.processInfo.systemUptime - readStartedAt
+            )
+            guard let sampleBuffer = nextSampleBuffer else {
                 input.markAsFinished()
                 state.markAudioFinished()
                 return
             }
-            if !input.append(sampleBuffer) {
+            let appendStartedAt = ProcessInfo.processInfo.systemUptime
+            let appended = input.append(sampleBuffer)
+            performanceMonitor?.recordAudioAppend(
+                duration: ProcessInfo.processInfo.systemUptime - appendStartedAt
+            )
+            if !appended {
                 state.fail(writer.error ?? RecorderError.mediaWriteFailed("Final video writer rejected an audio sample."))
                 return
             }
@@ -226,6 +280,7 @@ private final class ExportState: @unchecked Sendable {
     private let reader: AVAssetReader
     private let writer: AVAssetWriter
     private let continuation: CheckedContinuation<Void, Error>
+    private let performanceMonitor: ExportPerformanceMonitor
     private let lock = DispatchQueue(label: "blitzrecorder.optimized-export.state")
     private var videoFinished = false
     private var audioFinished: Bool
@@ -235,10 +290,12 @@ private final class ExportState: @unchecked Sendable {
         reader: AVAssetReader,
         writer: AVAssetWriter,
         hasAudio: Bool,
+        performanceMonitor: ExportPerformanceMonitor,
         continuation: CheckedContinuation<Void, Error>
     ) {
         self.reader = reader
         self.writer = writer
+        self.performanceMonitor = performanceMonitor
         self.continuation = continuation
         audioFinished = !hasAudio
     }
@@ -279,7 +336,11 @@ private final class ExportState: @unchecked Sendable {
             continuation.resume(throwing: reader.error ?? RecorderError.exportUnavailable)
             return
         }
+        let finalizationStartedAt = ProcessInfo.processInfo.systemUptime
         writer.finishWriting { [self] in
+            performanceMonitor.recordWriterFinalization(
+                duration: ProcessInfo.processInfo.systemUptime - finalizationStartedAt
+            )
             if self.writer.status == .completed {
                 self.continuation.resume()
             } else {

@@ -36,6 +36,7 @@ enum RecordingSettingsStore {
         static let canvasBackgroundStyle = "scene.canvasBackgroundStyle"
         static let canvasBackgroundAnimated = "scene.canvasBackgroundAnimated"
         static let canvasPadding = "scene.canvasPadding"
+        static let screenContentMode = "scene.screenContentMode"
         static let cameraContentMode = "scene.cameraContentMode"
         static let cameraFramePadding = "scene.cameraFramePadding"
         static let cameraShadowEnabled = "scene.cameraShadowEnabled"
@@ -141,7 +142,7 @@ enum RecordingSettingsStore {
         settings.remoteCameraSettingsByServiceID = remoteCameraSettingsByServiceID(defaults: defaults)
         settings.screenCrop = rect(for: Key.screenCrop, defaults: defaults)
         if defaults.object(forKey: Key.screenWindowZoom) != nil {
-            settings.screenWindowZoom = WindowZoomGeometry.clampedZoom(
+            settings.screenWindowZoom = ScreenSourceZoomGeometry.clamped(
                 CGFloat(defaults.double(forKey: Key.screenWindowZoom))
             )
         }
@@ -159,6 +160,10 @@ enum RecordingSettingsStore {
         }
         if defaults.object(forKey: Key.canvasPadding) != nil {
             settings.canvasPadding = clampedCanvasPadding(defaults.double(forKey: Key.canvasPadding))
+        }
+        if let rawScreenContentMode = defaults.string(forKey: Key.screenContentMode),
+           let screenContentMode = CameraContentMode(rawValue: rawScreenContentMode) {
+            settings.screenContentMode = screenContentMode
         }
         if let rawCameraContentMode = defaults.string(forKey: Key.cameraContentMode),
            let cameraContentMode = CameraContentMode(rawValue: rawCameraContentMode) {
@@ -313,7 +318,7 @@ enum RecordingSettingsStore {
             defaults.removeObject(forKey: Key.screenCrop)
         }
         defaults.set(
-            WindowZoomGeometry.clampedZoom(settings.screenWindowZoom),
+            ScreenSourceZoomGeometry.clamped(settings.screenWindowZoom),
             forKey: Key.screenWindowZoom
         )
         defaults.set(string(from: settings.cameraCropAmount), forKey: Key.cameraCropAmount)
@@ -321,6 +326,7 @@ enum RecordingSettingsStore {
         defaults.set(settings.canvasBackgroundStyle.rawValue, forKey: Key.canvasBackgroundStyle)
         defaults.set(settings.canvasBackgroundAnimated, forKey: Key.canvasBackgroundAnimated)
         defaults.set(clampedCanvasPadding(Double(settings.canvasPadding)), forKey: Key.canvasPadding)
+        defaults.set(settings.screenContentMode.rawValue, forKey: Key.screenContentMode)
         defaults.set(settings.cameraContentMode.rawValue, forKey: Key.cameraContentMode)
         defaults.removeObject(forKey: Key.cameraFramePadding)
         defaults.set(settings.cameraShadowEnabled, forKey: Key.cameraShadowEnabled)

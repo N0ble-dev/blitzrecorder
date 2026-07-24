@@ -3,11 +3,16 @@ import CoreMedia
 import ScreenCaptureKit
 
 protocol ScreenCaptureRecording: AnyObject {
+    var activeScreenCaptureStream: SCStream? { get }
     func start(url: URL, settings: RecordingSettings, filter pickedFilter: SCContentFilter?, timelineStartTime: CMTime?) async throws
     func update(settings: RecordingSettings, filter pickedFilter: SCContentFilter?) async throws
     func pause()
     func resume()
     func stop() async throws -> MediaWriterCompletion
+}
+
+extension ScreenCaptureRecording {
+    var activeScreenCaptureStream: SCStream? { nil }
 }
 
 protocol CameraCaptureRecording: AnyObject {
@@ -36,9 +41,17 @@ protocol MicrophoneCaptureRecording: AnyObject {
 protocol SystemAudioCaptureRecording: AnyObject {
     var recordingTimelineOffset: CMTime { get }
     func start(url: URL, settings: RecordingSettings, timelineStartTime: CMTime?) async throws
+    func start(_ request: SystemAudioCaptureStartRequest) async throws
     func pause()
     func resume()
     func stop() async throws -> MediaWriterCompletion
+}
+
+struct SystemAudioCaptureStartRequest {
+    let url: URL
+    let settings: RecordingSettings
+    let pickedScreenFilter: SCContentFilter?
+    let timelineStartTime: CMTime?
 }
 
 extension MicrophoneCaptureRecording {
@@ -47,6 +60,14 @@ extension MicrophoneCaptureRecording {
 
 extension SystemAudioCaptureRecording {
     var recordingTimelineOffset: CMTime { .zero }
+
+    func start(_ request: SystemAudioCaptureStartRequest) async throws {
+        try await start(
+            url: request.url,
+            settings: request.settings,
+            timelineStartTime: request.timelineStartTime
+        )
+    }
 }
 
 struct CaptureSourceRunSummary {
@@ -136,6 +157,7 @@ final class CaptureSourceRun {
 
     private var settings: RecordingSettings
     private var pickedScreenFilter: SCContentFilter?
+    private let screenRecorder: ScreenCaptureRecording
     private var timelineStartTime: CMTime?
     private var hostTimelineStartTime: UInt64?
     private var timelineTrimOffset = CMTime.zero
@@ -169,6 +191,7 @@ final class CaptureSourceRun {
         self.take = take
         self.settings = settings
         self.pickedScreenFilter = pickedScreenFilter
+        self.screenRecorder = screenRecorder
         self.timelineStartTime = timelineStartTime
         self.sourceAdapters = Self.makeSourceAdapters(
             take: take,
@@ -178,6 +201,11 @@ final class CaptureSourceRun {
             audioRecorder: audioRecorder,
             systemAudioRecorder: systemAudioRecorder
         )
+    }
+
+    var activeScreenCaptureStream: SCStream? {
+        guard activeSources.contains(.screen) else { return nil }
+        return screenRecorder.activeScreenCaptureStream
     }
 
     @discardableResult
@@ -420,12 +448,13 @@ final class CaptureSourceRun {
                 timelineOffset: { audioRecorder.recordingTimelineOffset }
             ),
             .systemAudio: CaptureSourceRunAdapter(
-                start: { settings, _, timeline in
-                    try await systemAudioRecorder.start(
+                start: { settings, pickedScreenFilter, timeline in
+                    try await systemAudioRecorder.start(SystemAudioCaptureStartRequest(
                         url: take.systemAudioURL,
                         settings: settings,
+                        pickedScreenFilter: pickedScreenFilter,
                         timelineStartTime: timeline.timelineStartTime
-                    )
+                    ))
                 },
                 update: { _, _ in },
                 pause: { systemAudioRecorder.pause() },

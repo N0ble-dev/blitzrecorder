@@ -55,6 +55,32 @@ final class SceneLibraryTests: XCTestCase {
         XCTAssertEqual(decoded.screenSourceBinding, settings.screenSourceBinding)
     }
 
+    func testSceneSnapshotPersistsScreenContentMode() throws {
+        var settings = RecordingSettings()
+        settings.screenContentMode = .fit
+
+        let snapshot = RecordingSceneSnapshot(settings: settings)
+        let decoded = try JSONDecoder().decode(
+            RecordingSceneSnapshot.self,
+            from: JSONEncoder().encode(snapshot)
+        )
+
+        XCTAssertEqual(decoded.screenContentMode, .fit)
+    }
+
+    func testSceneSnapshotDefaultsMissingScreenContentModeToFill() throws {
+        let snapshot = RecordingSceneSnapshot(settings: RecordingSettings())
+        var payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot)) as? [String: Any]
+        )
+        payload.removeValue(forKey: "screenContentMode")
+
+        let legacyData = try JSONSerialization.data(withJSONObject: payload)
+        let decoded = try JSONDecoder().decode(RecordingSceneSnapshot.self, from: legacyData)
+
+        XCTAssertEqual(decoded.screenContentMode, .fill)
+    }
+
     func testSceneSnapshotDecodesMissingScreenSourceBindingAsDisplayBinding() throws {
         var settings = RecordingSettings()
         settings.selectedDisplayID = "42"

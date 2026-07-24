@@ -516,7 +516,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private func refreshStartupState() {
         Task {
             coordinator.refreshAudioLevelMonitoring()
-            await viewModel.refreshSources()
             viewModel.syncSettings()
             refreshPermissionGate()
         }
@@ -574,15 +573,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             return
         }
 
-        guard coordinator.settings.usesPickedScreenContent || coordinator.hasScreenCaptureAccess() else {
+        guard coordinator.hasActivePickedScreenContent else {
             screenPreviewStartRevision += 1
-            if coordinator.settings.screenSourceBinding?.isConcreteSelection != true {
-                previewStage.screenPreview.setMessage("")
-                viewModel.applyMessage("Enable Screen Recording, then choose a screen source.")
-            } else {
-                previewStage.screenPreview.setMessage("")
-                viewModel.applyMessage("Enable Screen Recording to preview the selected source.")
-            }
+            previewStage.screenPreview.setMessage("")
+            viewModel.applyMessage("Choose a screen, app, or window to preview.")
             lastStartedScreenCaptureSignature = nil
             refreshPermissionGate()
             return

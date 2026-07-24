@@ -71,6 +71,63 @@ final class ScreenCaptureGeometryTests: XCTestCase {
         XCTAssertEqual(geometry.aspectRatio(), 16.0 / 9.0, accuracy: 0.0001)
     }
 
+    func testPickedWindowUsesSelectedLayoutAspectInsteadOfStalePickerAspect() {
+        var settings = RecordingSettings()
+        settings.layout = .horizontal
+        settings.enabledSources = [.screen, .camera]
+        settings.sceneLayout.cameraFrame = CGRect(
+            x: 0,
+            y: 0,
+            width: 1.0 / 3.0,
+            height: 1
+        )
+        settings.sceneLayout.screenFrame = CGRect(
+            x: 0.3681403084,
+            y: 0.0536262967,
+            width: 0.6309158022,
+            height: 0.9463737033
+        )
+        settings.screenSourceBinding = ScreenSourceBinding(
+            kind: .window,
+            displayID: nil,
+            bundleIdentifier: "com.openai.codex",
+            applicationName: "ChatGPT",
+            processID: nil,
+            windowID: 1,
+            windowTitle: "ChatGPT"
+        )
+
+        let geometry = ScreenCaptureGeometry.screenSourceGeometryForTesting(
+            settings: settings,
+            pickedContentAspectRatio: 16.0 / 9.0
+        )
+
+        XCTAssertEqual(geometry.aspectRatio(), 853.0 / 720.0, accuracy: 0.002)
+    }
+
+    func testPickedWindowTracksItsFullResizedBoundsWithoutAStaleSourceRect() {
+        var settings = RecordingSettings()
+        settings.screenSourceBinding = ScreenSourceBinding(
+            kind: .window,
+            displayID: nil,
+            bundleIdentifier: "com.openai.codex",
+            applicationName: "ChatGPT",
+            processID: nil,
+            windowID: 1,
+            windowTitle: "ChatGPT"
+        )
+
+        XCTAssertTrue(
+            ScreenCaptureGeometry.usesAutomaticFullWindowSourceRect(for: settings)
+        )
+
+        settings.screenCrop = CGRect(x: 0, y: 0, width: 0.5, height: 1)
+
+        XCTAssertFalse(
+            ScreenCaptureGeometry.usesAutomaticFullWindowSourceRect(for: settings)
+        )
+    }
+
     func testDisplayLocalSourceRectConvertsWindowFrameToDisplayPixels() throws {
         let rect = try XCTUnwrap(ScreenCaptureGeometry.displayLocalSourceRect(
             for: CGRect(x: 150, y: 250, width: 400, height: 300),

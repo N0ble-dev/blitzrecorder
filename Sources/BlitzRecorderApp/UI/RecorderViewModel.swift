@@ -213,8 +213,13 @@ final class RecorderViewModel {
     }
 
     var selectedScreenSourceDisplayName: String {
+        let needsPicker = settings.enabledSources.contains(.screen)
+            || settings.enabledSources.contains(.systemAudio)
+        if needsPicker, !coordinator.hasActivePickedScreenContent {
+            return "Choose screen source"
+        }
         if settings.usesPickedScreenContent {
-            return "Picked screen content"
+            return settings.screenSourceBinding?.displayName ?? "Picked screen content"
         }
         if let binding = settings.screenSourceBinding,
            let option = availableScreenSources.first(where: { $0.binding == binding }) {
@@ -464,9 +469,11 @@ final class RecorderViewModel {
         readiness: RecordingReadiness,
         settings: RecordingSettings
     ) -> Bool {
-        readiness.blockers.contains { $0.source == .screen }
-            && settings.enabledSources.contains(.screen)
-            && !settings.usesPickedScreenContent
+        readiness.blockers.contains {
+            $0.source == .screen || $0.source == .systemAudio
+        }
+            && (settings.enabledSources.contains(.screen)
+                || settings.enabledSources.contains(.systemAudio))
     }
 
     var isPersistentScreenCaptureAccessActive: Bool {
@@ -474,10 +481,37 @@ final class RecorderViewModel {
     }
 
     var shouldShowAppWindowSourcePermissionHint: Bool {
-        !isPersistentScreenCaptureAccessActive
-            && !availableScreenSources.contains {
-                $0.binding.kind == .application || $0.binding.kind == .window
-            }
+        false
+    }
+
+    var hasActiveScreenPickerSelection: Bool {
+        coordinator.hasActivePickedScreenContent
+    }
+
+    struct ScreenWindowScalingSupportRequest {
+        let settings: RecordingSettings
+        let hasActivePickerSelection: Bool
+    }
+
+    var supportsScreenWindowScaling: Bool {
+        Self.supportsScreenWindowScaling(ScreenWindowScalingSupportRequest(
+            settings: settings,
+            hasActivePickerSelection: hasActiveScreenPickerSelection
+        ))
+    }
+
+    static func supportsScreenWindowScaling(
+        _ request: ScreenWindowScalingSupportRequest
+    ) -> Bool {
+        switch request.settings.screenSourceBinding?.kind {
+        case .application, .window:
+            return true
+        case .display:
+            return false
+        case nil:
+            return request.settings.usesPickedScreenContent
+                && request.hasActivePickerSelection
+        }
     }
 
     var hasAccessibilityAccessForWindowControls: Bool {
@@ -487,6 +521,7 @@ final class RecorderViewModel {
 
     var canShowScreenWindowFitControls: Bool {
         _ = permissionRefreshToken
+        guard supportsScreenWindowScaling else { return false }
         return Self.canShowScreenWindowFitControls(
             settings: settings,
             targetWindowInfo: targetWindowInfo,
@@ -507,7 +542,8 @@ final class RecorderViewModel {
             return false
         }
 
-        if settings.usesPickedScreenContent {
+        if settings.usesPickedScreenContent,
+           settings.screenSourceBinding == nil {
             return true
         }
 
@@ -517,7 +553,7 @@ final class RecorderViewModel {
         case .application:
             return true
         case .display, .none:
-            return targetWindowInfo != nil
+            return false
         }
     }
 
@@ -531,10 +567,7 @@ final class RecorderViewModel {
     }
 
     var needsPersistentScreenCaptureAccess: Bool {
-        let needsScreen = settings.enabledSources.contains(.screen)
-            && !settings.usesPickedScreenContent
-            && settings.screenSourceBinding?.isConcreteSelection == true
-        return needsScreen && !isPersistentScreenCaptureAccessActive
+        false
     }
 
     init(
@@ -708,6 +741,7 @@ final class RecorderViewModel {
         previewStage.canvasBackgroundStyle = coordinator.settings.canvasBackgroundStyle
         previewStage.canvasBackgroundAnimated = coordinator.settings.canvasBackgroundAnimated
         previewStage.canvasPadding = coordinator.settings.canvasPadding
+        previewStage.screenContentMode = coordinator.settings.screenContentMode
         previewStage.cameraContentMode = coordinator.settings.cameraContentMode
         previewStage.cameraFramePadding = coordinator.settings.cameraFramePadding
         previewStage.cameraShadowEnabled = coordinator.settings.cameraShadowEnabled
@@ -765,10 +799,13 @@ final class RecorderViewModel {
 
     func toggleSource(_ source: CaptureSource) {
         if source == .screen, !isSourceConfigured(.screen) {
-            if restoreSavedScreenSource() {
-                return
-            }
             pickAndEnableScreenSource()
+            return
+        }
+        if source == .systemAudio,
+           !isSourceConfigured(.systemAudio),
+           !coordinator.hasActivePickedScreenContent {
+            pickAndEnableSystemAudioSource()
             return
         }
 
@@ -783,22 +820,17 @@ final class RecorderViewModel {
         }
     }
 
-    private func restoreSavedScreenSource() -> Bool {
-        guard settings.screenSourceBinding?.isConcreteSelection == true else {
-            return false
-        }
-        coordinator.addSource(.screen)
-        syncSettings()
-        selectSource(.screen)
-        return true
-    }
-
     func setSourceVisible(_ source: CaptureSource, visible: Bool) {
         if source == .screen,
            visible,
-           (!isSourceConfigured(.screen)
-            || (!coordinator.settings.usesPickedScreenContent && !coordinator.hasScreenCaptureAccess())) {
+           (!isSourceConfigured(.screen) || !coordinator.hasActivePickedScreenContent) {
             pickAndEnableScreenSource()
+            return
+        }
+        if source == .systemAudio,
+           visible,
+           !coordinator.hasActivePickedScreenContent {
+            pickAndEnableSystemAudioSource()
             return
         }
 
@@ -884,8 +916,7 @@ final class RecorderViewModel {
     func setScenePreset(_ preset: ScenePreset) {
         if preset.enablesScreenSource,
            !isSourceConfigured(.screen),
-           !coordinator.settings.usesPickedScreenContent,
-           !coordinator.hasScreenCaptureAccess() {
+           !coordinator.hasActivePickedScreenContent {
             Task {
                 do {
                     try await coordinator.pickScreenSource()
@@ -946,6 +977,11 @@ final class RecorderViewModel {
         syncSettingsAfterSceneChange()
     }
 
+    func setScreenContentMode(_ mode: CameraContentMode) {
+        coordinator.setScreenContentMode(mode)
+        syncSettingsAfterSceneChange()
+    }
+
     func setCameraFramePadding(_ padding: Double) {
         coordinator.setCameraFramePadding(CGFloat(padding))
         syncSettingsAfterSceneChange()
@@ -986,8 +1022,7 @@ final class RecorderViewModel {
         size: CGFloat
     ) {
         if !isSourceConfigured(.screen),
-           !coordinator.settings.usesPickedScreenContent,
-           !coordinator.hasScreenCaptureAccess() {
+           !coordinator.hasActivePickedScreenContent {
             Task {
                 do {
                     try await coordinator.pickScreenSource()
@@ -1035,10 +1070,15 @@ final class RecorderViewModel {
     }
 
     func setTargetWindowZoom(_ zoom: CGFloat) {
-        screenCaptureAreaSelection = .activeWindow
         targetWindowZoom = clampedTargetWindowZoom(zoom)
+        coordinator.setScreenContentMode(.fit)
         coordinator.setScreenWindowZoom(targetWindowZoom)
         settings = coordinator.settings
+        guard settings.screenSourceBinding?.kind != .display else {
+            cancelScheduledTargetWindowFit()
+            return
+        }
+        screenCaptureAreaSelection = .activeWindow
         scheduleTargetWindowFit()
     }
 
@@ -1051,6 +1091,7 @@ final class RecorderViewModel {
 
     func fitCurrentScreenWindowToSlot() {
         cancelScheduledTargetWindowFit()
+        coordinator.setScreenContentMode(.fit)
         applyCurrentScreenWindowZoom(targetWindowZoom)
     }
 
@@ -1183,7 +1224,7 @@ final class RecorderViewModel {
     }
 
     private func clampedTargetWindowZoom(_ zoom: CGFloat) -> CGFloat {
-        WindowZoomGeometry.clampedZoom(zoom)
+        ScreenSourceZoomGeometry.clamped(zoom)
     }
 
     func selectLayer(_ layer: SceneLayerKind) {
@@ -1822,12 +1863,11 @@ final class RecorderViewModel {
     var screenNeedsPicking: Bool {
         settings.enabledSources.contains(.screen)
             && !settings.hiddenSources.contains(.screen)
-            && !settings.usesPickedScreenContent
-            && !coordinator.hasScreenCaptureAccess()
+            && !coordinator.hasActivePickedScreenContent
     }
 
     var screenPickActionTitle: String {
-        "Enable Screen Recording"
+        "Choose Screen"
     }
 
     private func pickAndEnableScreenSource() {
@@ -1841,6 +1881,20 @@ final class RecorderViewModel {
                 } else {
                     detailMessage = settings.usesPickedScreenContent ? "Screen selected for this session." : "Screen source saved."
                 }
+            } catch {
+                detailMessage = "Screen picker failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func pickAndEnableSystemAudioSource() {
+        Task {
+            do {
+                try await coordinator.pickScreenContent()
+                coordinator.addSource(.systemAudio)
+                syncSettings()
+                selectSource(.systemAudio)
+                detailMessage = "Mac audio source selected for this session."
             } catch {
                 detailMessage = "Screen picker failed: \(error.localizedDescription)"
             }
@@ -2091,11 +2145,11 @@ final class RecorderViewModel {
         coordinator.exportProject(ProjectExportRequest(
             projectURL: projectURL,
             outputFormat: request.outputFormat,
-            outputResolution: request.outputResolution,
-            videoQuality: request.videoQuality,
+            performanceProfile: request.performanceProfile,
             destinationURL: destinationURL,
             hiddenVideoSources: request.hiddenVideoSources,
-            mutedAudioSources: request.mutedAudioSources
+            mutedAudioSources: request.mutedAudioSources,
+            backgroundMusic: request.backgroundMusic
         ))
     }
 
@@ -2105,12 +2159,20 @@ final class RecorderViewModel {
             return
         }
         let resolution = OutputResolution(rawValue: project.settings.outputResolution) ?? .p1080
+        let profile = ExportPerformanceProfile.resolved(
+            preset: .balanced,
+            sourceResolution: resolution,
+            sourceFramesPerSecond: project.settings.framesPerSecond,
+            customResolution: resolution,
+            customFramesPerSecond: project.settings.framesPerSecond,
+            customVideoQuality: .high
+        )
         exportLastProject(EditorExportRequest(
             outputFormat: format,
-            outputResolution: resolution,
-            videoQuality: .high,
+            performanceProfile: profile,
             hiddenVideoSources: [],
-            mutedAudioSources: []
+            mutedAudioSources: [],
+            backgroundMusic: nil
         ))
     }
 

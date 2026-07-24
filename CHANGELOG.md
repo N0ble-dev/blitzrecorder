@@ -6,6 +6,14 @@ This project uses GitHub Releases for downloadable macOS builds. Release tags us
 
 ## Unreleased
 
+## 0.7.0 - 2026-07-24
+
+- Faster exports: new Metal-based export compositor with hardware video encoding when available.
+- Added export performance presets and frame rate options in the editor export panel.
+- Added optional background music when exporting a project.
+- Screen picker can now retarget an active stream, and app/window capture geometry is more reliable.
+- Transcripts can be copied as Markdown from the project library.
+
 ## 0.6.0 - 2026-07-23
 
 - App capture now records the selected app's main window instead of combining all of its windows.

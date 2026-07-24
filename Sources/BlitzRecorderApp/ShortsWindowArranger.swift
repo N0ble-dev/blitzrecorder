@@ -104,6 +104,7 @@ enum ShortsWindowArranger {
         captureLayout: CaptureLayout,
         sceneLayout: SceneLayout,
         enabledSources: Set<CaptureSource>,
+        canvasPadding: CGFloat = 0,
         zoom: CGFloat
     ) throws -> ShortsWindowArrangement {
         try fitFrontWindow(
@@ -115,6 +116,7 @@ enum ShortsWindowArranger {
                     captureLayout: captureLayout,
                     sceneLayout: sceneLayout,
                     enabledSources: enabledSources,
+                    canvasPadding: canvasPadding,
                     zoom: zoom
                 )
             }
@@ -125,6 +127,7 @@ enum ShortsWindowArranger {
         displayID: String?,
         captureLayout: CaptureLayout,
         screenSlot: CGRect,
+        canvasPadding: CGFloat = 0,
         zoom: CGFloat
     ) throws -> ShortsWindowArrangement {
         try fitFrontWindow(
@@ -135,6 +138,7 @@ enum ShortsWindowArranger {
                     visibleFrame: screen.visibleFrame,
                     captureLayout: captureLayout,
                     screenSlot: screenSlot,
+                    canvasPadding: canvasPadding,
                     zoom: zoom
                 )
             }
@@ -260,6 +264,7 @@ enum ShortsWindowArranger {
         captureLayout: CaptureLayout,
         sceneLayout: SceneLayout,
         enabledSources: Set<CaptureSource>,
+        canvasPadding: CGFloat = 0,
         zoom: CGFloat = 1
     ) throws -> ShortsWindowArrangement {
         guard accessibilityTrusted(prompt: false) else {
@@ -273,6 +278,7 @@ enum ShortsWindowArranger {
             captureLayout: captureLayout,
             sceneLayout: sceneLayout,
             enabledSources: enabledSources,
+            canvasPadding: canvasPadding,
             zoom: zoom
         )
         let candidate = WindowCandidate(ownerPID: ownerPID, ownerName: appName, title: title, bounds: bounds)
@@ -296,6 +302,7 @@ enum ShortsWindowArranger {
         captureLayout: CaptureLayout,
         sceneLayout: SceneLayout,
         enabledSources: Set<CaptureSource>,
+        canvasPadding: CGFloat = 0,
         zoom: CGFloat = 1
     ) throws -> ShortsWindowArrangement {
         guard accessibilityTrusted(prompt: false) else {
@@ -309,6 +316,7 @@ enum ShortsWindowArranger {
             captureLayout: captureLayout,
             sceneLayout: sceneLayout,
             enabledSources: enabledSources,
+            canvasPadding: canvasPadding,
             zoom: zoom
         )
         let window = try primaryAccessibilityWindow(ownerPID: ownerPID, on: screen)

@@ -3,47 +3,43 @@ import CoreGraphics
 import XCTest
 
 final class ScreenSourceZoomGeometryTests: XCTestCase {
-    func testZoomCropsContentWithoutChangingTheSourceWindow() throws {
-        let crop = try XCTUnwrap(ScreenSourceZoomGeometry.crop(request: .init(
-            baseCrop: nil,
-            zoom: 1.25
-        )))
+    func testUiScaleKeepsTheFullSourceVisible() {
+        var settings = RecordingSettings()
+        settings.screenWindowZoom = 2
 
-        XCTAssertEqual(crop.minX, 0.1, accuracy: 0.0001)
-        XCTAssertEqual(crop.minY, 0.1, accuracy: 0.0001)
-        XCTAssertEqual(crop.width, 0.8, accuracy: 0.0001)
-        XCTAssertEqual(crop.height, 0.8, accuracy: 0.0001)
+        XCTAssertNil(ScreenCaptureGeometry.effectiveCrop(for: settings))
     }
 
-    func testResetRestoresOriginalCrop() throws {
-        let base = CGRect(x: 0.2, y: 0.1, width: 0.6, height: 0.7)
-        _ = try XCTUnwrap(ScreenSourceZoomGeometry.crop(request: .init(
-            baseCrop: base,
-            zoom: 1.5
-        )))
-        let reset = try XCTUnwrap(ScreenSourceZoomGeometry.crop(request: .init(
-            baseCrop: base,
-            zoom: 1
-        )))
+    func testUiScaleKeepsManualCropUnchanged() {
+        var settings = RecordingSettings()
+        settings.screenCrop = CGRect(x: 0.2, y: 0.1, width: 0.6, height: 0.7)
+        settings.screenWindowZoom = 2
 
-        XCTAssertEqual(reset.minX, base.minX, accuracy: 0.0001)
-        XCTAssertEqual(reset.minY, base.minY, accuracy: 0.0001)
-        XCTAssertEqual(reset.width, base.width, accuracy: 0.0001)
-        XCTAssertEqual(reset.height, base.height, accuracy: 0.0001)
+        XCTAssertEqual(ScreenCaptureGeometry.effectiveCrop(for: settings), settings.screenCrop)
     }
 
-    func testResetFullFrameRemovesCrop() {
-        let zoomed = ScreenSourceZoomGeometry.crop(request: .init(
-            baseCrop: nil,
-            zoom: 1.5
-        ))
-        let reset = ScreenSourceZoomGeometry.crop(request: .init(
-            baseCrop: nil,
-            zoom: 1
-        ))
+    func testTwoXCanvasZoomKeepsPhysicalWindowAt720Points() {
+        let plan = TargetWindowFitting.plan(
+            screenFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+            visibleFrame: CGRect(x: 0, y: 30, width: 1920, height: 1050),
+            captureLayout: .horizontal,
+            screenSlot: CGRect(x: 1.0 / 3.0, y: 0, width: 2.0 / 3.0, height: 1),
+            canvasPadding: 0,
+            zoom: ScreenWindowFramingPolicy.physicalWindowScale
+        )
 
-        XCTAssertNotNil(zoomed)
-        XCTAssertNil(reset)
+        XCTAssertEqual(plan.windowFrame.height, 720, accuracy: 0.0001)
+        XCTAssertEqual(ScreenSourceZoomGeometry.clamped(2), 2)
+    }
+
+    func testTwoXUiScaleHalvesThePhysicalSourceWindow() {
+        let frame = WindowZoomGeometry.sourceFrame(
+            for: CGRect(x: 0, y: 0, width: 1280, height: 720),
+            zoom: 2
+        )
+
+        XCTAssertEqual(frame.width, 640, accuracy: 0.0001)
+        XCTAssertEqual(frame.height, 360, accuracy: 0.0001)
     }
 
     func testCropScalesInsideExistingSourceRect() {

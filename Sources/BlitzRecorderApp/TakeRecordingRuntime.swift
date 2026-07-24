@@ -12,6 +12,7 @@ enum TakeRecordingStopOutcome {
 protocol LiveCompositedRecording: AnyObject {
     var onCameraPreviewSampleBuffer: ((CMSampleBuffer, Int, Int) -> Void)? { get set }
     var onScreenPreviewFrame: ScreenPreviewer.FrameHandler? { get set }
+    var activeScreenCaptureStream: SCStream? { get }
 
     func start(
         take: RecordingTake,
@@ -25,6 +26,10 @@ protocol LiveCompositedRecording: AnyObject {
     func stop() async throws -> MediaWriterCompletion
     func updateScene(_ scene: RecordingScene, transition: RecordingSceneTransition)
     func updateScreenCapture(settings: RecordingSettings, filter pickedFilter: SCContentFilter?) async throws
+}
+
+extension LiveCompositedRecording {
+    var activeScreenCaptureStream: SCStream? { nil }
 }
 
 @MainActor
@@ -49,6 +54,17 @@ final class TakeRecordingRuntime {
     var isUsingLiveCompositor: Bool {
         if case .liveCompositor = mode { return true }
         return false
+    }
+
+    var activeScreenCaptureStream: SCStream? {
+        switch mode {
+        case .liveCompositor:
+            liveCompositedRecorder.activeScreenCaptureStream
+        case .captureRun(let captureRun):
+            captureRun.activeScreenCaptureStream
+        case .idle:
+            nil
+        }
     }
 
     func setLiveCompositorCameraPreviewHandler(_ handler: @escaping (CMSampleBuffer, Int, Int) -> Void) {

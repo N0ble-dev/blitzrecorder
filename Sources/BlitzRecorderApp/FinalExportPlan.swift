@@ -247,12 +247,7 @@ enum FinalExportPlanning {
         settings: RecordingSettings,
         sceneEvents: [RecordingSceneEvent]
     ) -> FinalExportEngine {
-        if settings.customVideoBitrate != nil {
-            return .optimizedWriter
-        }
-        return RecordingSceneTimeline.requiresCanvasAwareRendering(settings: settings, sceneEvents: sceneEvents)
-            ? .assetExportSession
-            : .optimizedWriter
+        .optimizedWriter
     }
 
     static func transitionSampleInterval(for settings: RecordingSettings) -> TimeInterval {

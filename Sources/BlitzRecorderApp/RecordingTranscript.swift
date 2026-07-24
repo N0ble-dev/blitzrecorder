@@ -115,6 +115,61 @@ struct RecordingTranscript: Codable, Equatable, Identifiable, Sendable {
         .joined(separator: "\n\n")
     }
 
+    var markdownText: String {
+        markdownText(title: defaultMarkdownTitle)
+    }
+
+    func markdownText(title rawTitle: String) -> String {
+        let resolvedTitle = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = Self.markdownEscaped(
+            resolvedTitle.isEmpty ? defaultMarkdownTitle : resolvedTitle
+        )
+        var sections = ["# \(title)"]
+
+        let contextualSpeakers = speakers.filter {
+            !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !$0.context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        if !contextualSpeakers.isEmpty {
+            let speakerLines = contextualSpeakers.map { speaker in
+                let name = Self.markdownEscaped(speaker.displayName)
+                let context = speaker.context.trimmingCharacters(in: .whitespacesAndNewlines)
+                return context.isEmpty
+                    ? "- **\(name)**"
+                    : "- **\(name)** — \(context)"
+            }
+            sections.append("## Speakers\n\n\(speakerLines.joined(separator: "\n"))")
+        }
+
+        let transcriptBody: String
+        if segments.isEmpty {
+            transcriptBody = text
+        } else {
+            transcriptBody = segments.map { segment in
+                let timestamp = Self.timestamp(segment.startTime)
+                let speaker = Self.markdownEscaped(speakerName(for: segment.speakerID))
+                return "**[\(timestamp)] \(speaker):** \(segment.text)"
+            }
+            .joined(separator: "\n\n")
+        }
+        sections.append("## Transcript\n\n\(transcriptBody)")
+        return sections.joined(separator: "\n\n")
+    }
+
+    private var defaultMarkdownTitle: String {
+        let rawTitle = suggestedTitle?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let rawTitle, !rawTitle.isEmpty {
+            return rawTitle
+        }
+        let mediaURL = URL(fileURLWithPath: mediaPath)
+        if mediaURL.pathExtension == "blitzrecorder" {
+            return "Recording transcript"
+        }
+        let mediaTitle = mediaURL.deletingPathExtension().lastPathComponent
+        return mediaTitle.isEmpty ? "Transcript" : mediaTitle
+    }
+
     private static func timestamp(_ seconds: TimeInterval) -> String {
         let totalSeconds = max(0, Int(seconds.rounded(.down)))
         let hours = totalSeconds / 3_600
@@ -124,6 +179,15 @@ struct RecordingTranscript: Codable, Equatable, Identifiable, Sendable {
             return String(format: "%02d:%02d:%02d", hours, minutes, remainingSeconds)
         }
         return String(format: "%02d:%02d", minutes, remainingSeconds)
+    }
+
+    private static func markdownEscaped(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "*", with: "\\*")
+            .replacingOccurrences(of: "_", with: "\\_")
+            .replacingOccurrences(of: "[", with: "\\[")
+            .replacingOccurrences(of: "]", with: "\\]")
     }
 
     private static func coalesced(

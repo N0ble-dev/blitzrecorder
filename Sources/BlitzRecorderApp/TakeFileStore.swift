@@ -40,6 +40,7 @@ struct RecordingProject: Codable, Equatable {
         let canvasPadding: Double
         let screenCornerRadius: Double?
         let screenShadowEnabled: Bool?
+        let screenContentMode: String?
         let cameraContentMode: String
         let cameraFramePadding: Double
         let cameraShadowEnabled: Bool
@@ -401,6 +402,7 @@ extension RecordingProject.SettingsSnapshot {
         self.canvasPadding = Double(settings.canvasPadding)
         self.screenCornerRadius = Double(settings.screenCornerRadius)
         self.screenShadowEnabled = settings.screenShadowEnabled
+        self.screenContentMode = settings.screenContentMode.rawValue
         self.cameraContentMode = settings.cameraContentMode.rawValue
         self.cameraFramePadding = Double(settings.cameraFramePadding)
         self.cameraShadowEnabled = settings.cameraShadowEnabled
@@ -899,6 +901,8 @@ struct TakeFileStore {
         settings.canvasPadding = CGFloat(project.settings.canvasPadding)
         settings.screenCornerRadius = CGFloat(project.settings.screenCornerRadius ?? 0)
         settings.screenShadowEnabled = project.settings.screenShadowEnabled ?? false
+        settings.screenContentMode = project.settings.screenContentMode
+            .flatMap(CameraContentMode.init(rawValue:)) ?? settings.screenContentMode
         settings.cameraContentMode = CameraContentMode(rawValue: project.settings.cameraContentMode) ?? settings.cameraContentMode
         settings.cameraFramePadding = 0
         settings.cameraShadowEnabled = project.settings.cameraShadowEnabled
@@ -913,6 +917,7 @@ struct TakeFileStore {
             settings.cameraCropPosition = firstScene.cameraCropPosition
             settings.screenCornerRadius = firstScene.screenCornerRadius
             settings.screenShadowEnabled = firstScene.screenShadowEnabled
+            settings.screenContentMode = firstScene.screenContentMode
         }
         return settings
     }

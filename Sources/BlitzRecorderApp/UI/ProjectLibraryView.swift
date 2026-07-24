@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ProjectLibraryRenameRequest {
@@ -8,6 +9,84 @@ struct ProjectLibraryRenameRequest {
 struct ProjectTranscriptTitleRequest {
     let project: RecordingProjectHistory.Entry
     let transcript: String
+}
+
+struct TranscriptMarkdownCopyRequest {
+    let transcript: RecordingTranscript
+    let title: String
+}
+
+private struct CompactFlowLayout: Layout {
+    let spacing: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        layout(proposal: proposal, subviews: subviews).size
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let result = layout(
+            proposal: ProposedViewSize(width: bounds.width, height: proposal.height),
+            subviews: subviews
+        )
+        for placement in result.placements {
+            subviews[placement.index].place(
+                at: CGPoint(
+                    x: bounds.minX + placement.origin.x,
+                    y: bounds.minY + placement.origin.y
+                ),
+                proposal: ProposedViewSize(placement.size)
+            )
+        }
+    }
+
+    private func layout(
+        proposal: ProposedViewSize,
+        subviews: Subviews
+    ) -> Result {
+        let availableWidth = proposal.width ?? .infinity
+        var placements: [Placement] = []
+        var cursor = CGPoint.zero
+        var rowHeight: CGFloat = 0
+        var measuredWidth: CGFloat = 0
+
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            if cursor.x > 0, cursor.x + size.width > availableWidth {
+                cursor.x = 0
+                cursor.y += rowHeight + spacing
+                rowHeight = 0
+            }
+            placements.append(Placement(index: index, origin: cursor, size: size))
+            cursor.x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            measuredWidth = max(measuredWidth, cursor.x - spacing)
+        }
+
+        return Result(
+            size: CGSize(width: measuredWidth, height: cursor.y + rowHeight),
+            placements: placements
+        )
+    }
+
+    private struct Placement {
+        let index: Int
+        let origin: CGPoint
+        let size: CGSize
+    }
+
+    private struct Result {
+        let size: CGSize
+        let placements: [Placement]
+    }
 }
 
 enum ProjectLibrarySymbols {
@@ -632,6 +711,18 @@ struct ProjectLibraryView: View {
 
                 if let transcript = selectedTranscript {
                     Button {
+                        copyTranscriptAsMarkdown(TranscriptMarkdownCopyRequest(
+                            transcript: transcript,
+                            title: displayTitle(project)
+                        ))
+                    } label: {
+                        Label("Copy Markdown", systemImage: "doc.on.doc")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.white.opacity(0.70))
+                    .help("Copy the full transcript with headings, speakers, and timestamps")
+
+                    Button {
                         guard titleGenerationProjectID == nil else { return }
                         titleGenerationProjectID = project.id
                         Task {
@@ -692,16 +783,18 @@ struct ProjectLibraryView: View {
         }
     }
 
+    private func copyTranscriptAsMarkdown(_ request: TranscriptMarkdownCopyRequest) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(
+            request.transcript.markdownText(title: request.title),
+            forType: .string
+        )
+    }
+
     private func speakerLegend(
         _ transcript: RecordingTranscript
     ) -> some View {
-        LazyVGrid(
-            columns: [
-                GridItem(.adaptive(minimum: 150), spacing: 8)
-            ],
-            alignment: .leading,
-            spacing: 8
-        ) {
+        CompactFlowLayout(spacing: 8) {
             ForEach(Array(transcript.speakers.enumerated()), id: \.element.id) { index, speaker in
                 HStack(spacing: 6) {
                     Circle()
@@ -718,8 +811,10 @@ struct ProjectLibraryView: View {
                 .padding(.horizontal, 10)
                 .frame(height: 30)
                 .background(.white.opacity(0.045), in: .capsule)
+                .fixedSize()
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func inlineTranscriptRow(

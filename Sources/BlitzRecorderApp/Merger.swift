@@ -4,6 +4,15 @@ import CoreGraphics
 import Foundation
 import QuartzCore
 
+struct FinalVideoExportRequest {
+    let take: RecordingTake
+    let settings: RecordingSettings
+    let sceneEvents: [RecordingSceneEvent]
+    let backgroundMusic: ExportBackgroundMusic?
+    let destinationURL: URL?
+    let progressHandler: (@MainActor (Double) -> Void)?
+}
+
 enum Merger {
     static func exportFinalVideo(
         take: RecordingTake,
@@ -11,22 +20,36 @@ enum Merger {
         sceneEvents: [RecordingSceneEvent] = [],
         progressHandler: (@MainActor (Double) -> Void)? = nil
     ) async throws -> URL {
-        // The editor/live previews render source crops in a y-up space
-        // (AppKit `.lowerLeft` / a geometry-flipped CALayer clip). The export
-        // composites in AVFoundation's y-down space without that flip, so the
-        // vertical crop position samples the mirror region. Flip crop-Y here so
-        // the export matches what was previewed.
-        let settings = Self.exportCropCompensated(settings)
-        let sceneEvents = sceneEvents.map(Self.exportCropCompensated)
+        try await exportFinalVideo(FinalVideoExportRequest(
+            take: take,
+            settings: settings,
+            sceneEvents: sceneEvents,
+            backgroundMusic: nil,
+            destinationURL: nil,
+            progressHandler: progressHandler
+        ))
+    }
+
+    static func exportFinalVideo(
+        _ request: FinalVideoExportRequest
+    ) async throws -> URL {
+        let take = request.take
+        let settings = request.settings
+        let sceneEvents = request.sceneEvents
+        let progressHandler = request.progressHandler
         let fileManager = FileManager.default
         try fileManager.createDirectory(
             at: take.finalVideoURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let outputURL = uniqueFileURL(take.finalVideoURL)
-        let temporaryOutputURL = uniqueFileURL(
-            take.scratchDirectory
-                .appendingPathComponent(".final-export-\(UUID().uuidString).\(take.outputVideoFormat.fileExtension)")
+        let outputURL = request.destinationURL ?? uniqueFileURL(take.finalVideoURL)
+        let outputDirectory = outputURL.deletingLastPathComponent()
+        try fileManager.createDirectory(
+            at: outputDirectory,
+            withIntermediateDirectories: true
+        )
+        let temporaryOutputURL = outputDirectory.appendingPathComponent(
+            ".blitzrecorder-export-\(UUID().uuidString).\(take.outputVideoFormat.fileExtension)"
         )
 
         let videoSources = try await availableVideoSources(for: take, settings: settings)
@@ -82,27 +105,24 @@ enum Merger {
             )
             audioMixParameters.append(parameters)
         }
+        if let backgroundMusic = request.backgroundMusic {
+            let parameters = try await addBackgroundMusic(BackgroundMusicInsertionRequest(
+                selection: backgroundMusic,
+                composition: composition,
+                duration: duration
+            ))
+            audioMixParameters.append(parameters)
+        }
 
         let videoComposition = AVMutableVideoComposition()
-        let sourceAspectRatios = Dictionary(uniqueKeysWithValues: compositedSources.map {
-            ($0.kind, sourceAspectRatio(for: $0))
-        })
-        videoComposition.instructions = videoCompositionInstructions(
+        videoComposition.instructions = metalVideoCompositionInstructions(
             sources: compositedSources,
-            renderSize: renderSize,
-            renderSegments: exportPlan.renderSegments
+            renderSegments: exportPlan.renderSegments,
+            settings: settings
         )
+        videoComposition.customVideoCompositorClass = MetalExportVideoCompositor.self
         videoComposition.renderSize = renderSize
         videoComposition.frameDuration = CMTime(value: 1, timescale: CMTimeScale(settings.framesPerSecond))
-        applyCanvasBackground(
-            to: videoComposition,
-            renderSize: renderSize,
-            settings: settings,
-            sceneEvents: sceneEvents,
-            duration: duration,
-            renderSegments: exportPlan.renderSegments,
-            sourceAspectRatios: sourceAspectRatios
-        )
 
         let outputFileType = take.outputVideoFormat.avFileType
         let audioMix: AVMutableAudioMix?
@@ -151,19 +171,6 @@ enum Merger {
 
         try fileManager.moveItem(at: temporaryOutputURL, to: outputURL)
         return outputURL
-    }
-
-    private static func exportCropCompensated(_ settings: RecordingSettings) -> RecordingSettings {
-        var settings = settings
-        settings.cameraCropPosition.y = -settings.cameraCropPosition.y
-        return settings
-    }
-
-    private static func exportCropCompensated(_ event: RecordingSceneEvent) -> RecordingSceneEvent {
-        var scene = event.scene
-        scene.cameraCropPosition.y = -scene.cameraCropPosition.y
-        scene.screenCropPosition.y = -scene.screenCropPosition.y
-        return RecordingSceneEvent(time: event.time, scene: scene, transition: event.transition)
     }
 
     private static func exportWithAssetExportSession(
@@ -945,6 +952,59 @@ enum Merger {
         return parameters
     }
 
+    private static func addBackgroundMusic(
+        _ request: BackgroundMusicInsertionRequest
+    ) async throws -> AVMutableAudioMixInputParameters {
+        let asset = AVURLAsset(url: request.selection.url)
+        let tracks: [AVAssetTrack]
+        do {
+            tracks = try await asset.loadTracks(withMediaType: .audio)
+        } catch {
+            throw RecorderError.mediaWriteFailed(
+                "Background music is unreadable: \(error.localizedDescription)"
+            )
+        }
+        guard let audioTrack = tracks.first,
+              let compositionTrack = request.composition.addMutableTrack(
+                withMediaType: .audio,
+                preferredTrackID: kCMPersistentTrackID_Invalid
+              ) else {
+            throw RecorderError.mediaWriteFailed("Background music has no readable audio track.")
+        }
+        let trackTimeRange = try await audioTrack.load(.timeRange)
+        guard trackTimeRange.duration.isValid,
+              CMTimeCompare(trackTimeRange.duration, .zero) > 0 else {
+            throw RecorderError.mediaWriteFailed("Background music has no playable duration.")
+        }
+
+        var insertionTime = CMTime.zero
+        while CMTimeCompare(insertionTime, request.duration) < 0 {
+            let remaining = CMTimeSubtract(request.duration, insertionTime)
+            let clipDuration = CMTimeMinimum(trackTimeRange.duration, remaining)
+            try compositionTrack.insertTimeRange(
+                CMTimeRange(start: trackTimeRange.start, duration: clipDuration),
+                of: audioTrack,
+                at: insertionTime
+            )
+            insertionTime = CMTimeAdd(insertionTime, clipDuration)
+        }
+
+        let parameters = AVMutableAudioMixInputParameters(track: compositionTrack)
+        let volume = Float(min(1, max(0, request.selection.volume)))
+        parameters.setVolume(volume, at: .zero)
+        let fadeDuration = CMTimeMinimum(
+            request.duration,
+            CMTime(seconds: 0.75, preferredTimescale: 600)
+        )
+        let fadeStart = CMTimeSubtract(request.duration, fadeDuration)
+        parameters.setVolumeRamp(
+            fromStartVolume: volume,
+            toEndVolume: 0,
+            timeRange: CMTimeRange(start: fadeStart, duration: fadeDuration)
+        )
+        return parameters
+    }
+
     private static func validateExpectedAudio(
         in outputURL: URL,
         expectedAudioSources: [ExpectedAudioSource]
@@ -1023,6 +1083,29 @@ enum Merger {
             ).reversed()
             instruction.backgroundColor = segment.scene.canvasBackgroundStyle.appearance.solidCGColor
             return instruction
+        }
+    }
+
+    private static func metalVideoCompositionInstructions(
+        sources: [CompositedVideoSource],
+        renderSegments: [FinalExportRenderSegment],
+        settings: RecordingSettings
+    ) -> [MetalExportInstruction] {
+        let sourceDescriptors = sources.map {
+            MetalExportSourceDescriptor(
+                kind: $0.kind,
+                trackID: $0.compositionTrack.trackID,
+                preferredTransform: $0.preferredTransform
+            )
+        }
+        return renderSegments.map { segment in
+            MetalExportInstruction(MetalExportInstructionRequest(
+                timeRange: segment.timeRange,
+                scene: segment.scene,
+                settings: settings,
+                activeLayerOrder: segment.activeLayerOrder,
+                sourceDescriptors: sourceDescriptors
+            ))
         }
     }
 
@@ -1661,6 +1744,12 @@ private struct ExpectedAudioSource {
             source.rawValue
         }
     }
+}
+
+private struct BackgroundMusicInsertionRequest {
+    let selection: ExportBackgroundMusic
+    let composition: AVMutableComposition
+    let duration: CMTime
 }
 
 private struct VideoSource {

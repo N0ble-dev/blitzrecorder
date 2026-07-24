@@ -169,7 +169,7 @@ final class RecordingSettingsStoreTests: XCTestCase {
         defaults.set(4, forKey: "screen.windowZoom")
         XCTAssertEqual(
             RecordingSettingsStore.load(defaults: defaults).screenWindowZoom,
-            WindowZoomGeometry.maximumZoom,
+            ScreenSourceZoomGeometry.maximumZoom,
             accuracy: 0.0001
         )
     }
@@ -205,6 +205,7 @@ final class RecordingSettingsStoreTests: XCTestCase {
     func testPersistsCameraFrameOptionsWithoutLegacyFramePadding() {
         let defaults = temporaryDefaults()
         var settings = RecordingSettings()
+        settings.screenContentMode = .fit
         settings.cameraContentMode = .fit
         settings.cameraFramePadding = 0.12
         settings.cameraShadowEnabled = true
@@ -212,6 +213,7 @@ final class RecordingSettingsStoreTests: XCTestCase {
         RecordingSettingsStore.save(settings, defaults: defaults)
         let loaded = RecordingSettingsStore.load(defaults: defaults)
 
+        XCTAssertEqual(loaded.screenContentMode, .fit)
         XCTAssertEqual(loaded.cameraContentMode, .fit)
         XCTAssertEqual(loaded.cameraFramePadding, 0, accuracy: 0.0001)
         XCTAssertTrue(loaded.cameraShadowEnabled)

@@ -178,7 +178,8 @@ enum RecordingSceneTimeline {
 
 extension RecordingScene {
     var requiresCanvasAwareRendering: Bool {
-        canvasPadding > 0.001
+        screenContentMode == .fit
+            || canvasPadding > 0.001
             || canvasBackgroundStyle != .black
             || canvasBackgroundAnimated
             || screenCornerRadius > 0.001

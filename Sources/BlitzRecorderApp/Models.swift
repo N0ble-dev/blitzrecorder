@@ -391,20 +391,25 @@ enum SceneLayerKind: String, CaseIterable {
 
 struct EditorExportRequest {
     let outputFormat: OutputVideoFormat
-    let outputResolution: OutputResolution
-    let videoQuality: ExportVideoQuality
+    let performanceProfile: ExportPerformanceProfile
     let hiddenVideoSources: Set<SceneLayerKind>
     let mutedAudioSources: Set<CaptureSource>
+    let backgroundMusic: ExportBackgroundMusic?
 }
 
 struct ProjectExportRequest {
     let projectURL: URL
     let outputFormat: OutputVideoFormat
-    let outputResolution: OutputResolution
-    let videoQuality: ExportVideoQuality
+    let performanceProfile: ExportPerformanceProfile
     let destinationURL: URL
     let hiddenVideoSources: Set<SceneLayerKind>
     let mutedAudioSources: Set<CaptureSource>
+    let backgroundMusic: ExportBackgroundMusic?
+}
+
+struct ExportBackgroundMusic {
+    let url: URL
+    var volume: Double
 }
 
 enum CameraInsetAlignment: String, CaseIterable {
@@ -1152,6 +1157,7 @@ struct RecordingScene: Equatable {
             canvasPadding: settings.canvasPadding,
             screenCornerRadius: settings.screenCornerRadius,
             screenShadowEnabled: settings.screenShadowEnabled,
+            screenContentMode: settings.screenContentMode,
             cameraContentMode: settings.cameraContentMode,
             cameraFramePadding: 0,
             cameraShadowEnabled: settings.cameraShadowEnabled
@@ -1403,6 +1409,7 @@ struct RecordingSettings {
     var canvasPadding: CGFloat = 0
     var screenCornerRadius: CGFloat = 0
     var screenShadowEnabled: Bool = false
+    var screenContentMode: CameraContentMode = .fill
     var cameraContentMode: CameraContentMode = .fill
     var cameraFramePadding: CGFloat = 0
     var cameraShadowEnabled: Bool = false

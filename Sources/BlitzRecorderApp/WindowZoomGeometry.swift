@@ -2,7 +2,7 @@ import CoreGraphics
 
 enum WindowZoomGeometry {
     static let minimumZoom: CGFloat = 0.5
-    static let maximumZoom: CGFloat = 1.5
+    static let maximumZoom: CGFloat = 2
 
     static func clampedZoom(_ zoom: CGFloat) -> CGFloat {
         min(maximumZoom, max(minimumZoom, zoom))

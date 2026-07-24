@@ -3,11 +3,12 @@ import CoreGraphics
 import XCTest
 
 final class VideoRenderPlacementTests: XCTestCase {
-    func testWindowCaptureFillsStableScreenCardWhenNativeAspectChanges() {
+    func testWindowCaptureFitsStableScreenCardWhenNativeAspectChanges() {
         var settings = RecordingSettings()
         settings.layout = .horizontal
         settings.enabledSources = [.screen, .camera]
         settings.canvasPadding = 0.075
+        settings.screenContentMode = .fit
         settings.screenSourceBinding = ScreenSourceBinding(
             kind: .window,
             displayID: "4",
@@ -37,6 +38,34 @@ final class VideoRenderPlacementTests: XCTestCase {
         XCTAssertRect(geometry.targetRect(for: .screen), equals: expected)
         XCTAssertEqual(geometry.videoPlacement(for: .screen).contentMode, .aspectFit)
         XCTAssertNil(
+            geometry.videoPlacement(for: .screen).cropRectangle(
+                naturalSize: CGSize(width: 1440, height: 1080)
+            )
+        )
+    }
+
+    func testScreenFillUsesEntirePaddedFrame() {
+        var settings = RecordingSettings()
+        settings.layout = .horizontal
+        settings.enabledSources = [.screen]
+        settings.canvasPadding = 0.1
+        settings.screenContentMode = .fill
+        settings.sceneLayout = SceneLayout.presetLayout(.screenFullscreen, for: .horizontal)
+        let canvas = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let expected = SceneLayoutProjection.padded(
+            canvas,
+            in: canvas,
+            padding: settings.canvasPadding
+        )
+        let geometry = SceneRenderGeometry(
+            canvas: canvas,
+            scene: RecordingScene(settings: settings),
+            origin: .upperLeft
+        )
+
+        XCTAssertRect(geometry.targetRect(for: .screen), equals: expected)
+        XCTAssertEqual(geometry.videoPlacement(for: .screen).contentMode, .aspectFill)
+        XCTAssertNotNil(
             geometry.videoPlacement(for: .screen).cropRectangle(
                 naturalSize: CGSize(width: 1440, height: 1080)
             )
@@ -110,6 +139,7 @@ final class VideoRenderPlacementTests: XCTestCase {
         settings.enabledSources = [.screen]
         settings.sceneLayout = SceneLayout.presetLayout(.screenFullscreen, for: .vertical)
         settings.canvasPadding = 0.1
+        settings.screenContentMode = .fit
         let geometry = SceneRenderGeometry(
             canvas: CGRect(x: 0, y: 0, width: 1080, height: 1920),
             scene: RecordingScene(settings: settings),

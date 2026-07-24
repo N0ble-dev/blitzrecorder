@@ -121,12 +121,20 @@ enum ScreenCaptureGeometry {
     }
 
     private static func pickedScreenSourceAspectRatio(for settings: RecordingSettings, fallback: CGFloat) -> CGFloat {
+        let sourceAspectRatio: CGFloat
+        switch settings.screenSourceBinding?.kind {
+        case .application, .window:
+            sourceAspectRatio = TargetWindowFitting.sourceAspectRatio(for: settings)
+        case .display, nil:
+            sourceAspectRatio = fallback
+        }
+
         guard let screenCrop = settings.screenCrop,
               screenCrop.width > 0,
               screenCrop.height > 0 else {
-            return fallback
+            return sourceAspectRatio
         }
-        return fallback * screenCrop.width / screenCrop.height
+        return sourceAspectRatio * screenCrop.width / screenCrop.height
     }
 
     static func screenSourceGeometryForTesting(settings: RecordingSettings, pickedContentAspectRatio: CGFloat) -> ScreenSourceGeometry {
@@ -264,14 +272,28 @@ enum ScreenCaptureGeometry {
     }
 
     static func pickedContentAspectRatio(for filter: SCContentFilter) -> CGFloat {
-        let rect = filter.contentRect
+        let rect = SCShareableContent.info(for: filter).contentRect
         guard rect.width > 0, rect.height > 0 else {
             return SceneLayout.defaultScreenAspectRatio
         }
         return rect.width / rect.height
     }
 
-    static func pickedSourceRect(request: PickedScreenSourceRectRequest) -> CGRect {
+    static func normalizedPickedFilter(_ filter: SCContentFilter) -> SCContentFilter {
+        guard #available(macOS 15.2, *),
+              filter.style == .window,
+              filter.includedWindows.count == 1,
+              let window = filter.includedWindows.first else {
+            return filter
+        }
+        return SCContentFilter(desktopIndependentWindow: window)
+    }
+
+    static func pickedSourceRect(request: PickedScreenSourceRectRequest) -> CGRect? {
+        if usesAutomaticFullWindowSourceRect(for: request.settings) {
+            return nil
+        }
+
         let contentRect = SCShareableContent.info(for: request.filter).contentRect
         let bounds = CGRect(
             x: 0,
@@ -285,6 +307,16 @@ enum ScreenCaptureGeometry {
         ).sourceRect(in: bounds)
     }
 
+    static func usesAutomaticFullWindowSourceRect(for settings: RecordingSettings) -> Bool {
+        guard settings.screenCrop == nil else { return false }
+        switch settings.screenSourceBinding?.kind {
+        case .application, .window:
+            return true
+        case .display, nil:
+            return false
+        }
+    }
+
     static func croppedSourceRect(request: ScreenSourceCropRequest) -> CGRect {
         guard let normalizedCrop = request.normalizedCrop else { return request.sourceRect }
         return CGRect(
@@ -296,10 +328,7 @@ enum ScreenCaptureGeometry {
     }
 
     static func effectiveCrop(for settings: RecordingSettings) -> CGRect? {
-        ScreenSourceZoomGeometry.crop(request: .init(
-            baseCrop: settings.screenCrop,
-            zoom: settings.screenWindowZoom
-        ))
+        settings.screenCrop
     }
 
     static func persistentBinding(forPickedContent filter: SCContentFilter) async -> ScreenSourceBinding? {
@@ -307,62 +336,7 @@ enum ScreenCaptureGeometry {
            let exactBinding = exactPersistentBinding(for: filter) {
             return exactBinding
         }
-
-        let contentRect = SCShareableContent.info(for: filter).contentRect
-        guard contentRect.width > 0, contentRect.height > 0,
-              let content = try? await SCShareableContent.current else {
-            return nil
-        }
-
-        if let display = pickedDisplay(for: contentRect, displays: content.displays) {
-            return .display(
-                id: String(display.displayID),
-                name: "Display \(display.displayID) (\(display.width)x\(display.height))"
-            )
-        }
-
-        let overlappingWindows = content.windows
-            .filter { window in
-                window.isOnScreen
-                    && window.frame.width > 0
-                    && window.frame.height > 0
-                    && overlapArea(window.frame, contentRect) > 0
-            }
-            .sorted { lhs, rhs in
-                overlapArea(lhs.frame, contentRect) > overlapArea(rhs.frame, contentRect)
-            }
-
-        guard let target = overlappingWindows.first,
-              let app = target.owningApplication else {
-            return nil
-        }
-
-        let targetOverlap = overlapArea(target.frame, contentRect)
-        let significantWindows = overlappingWindows.filter { window in
-            overlapArea(window.frame, contentRect) >= max(1, targetOverlap * 0.2)
-        }
-        if significantWindows.count > 1,
-           significantWindows.allSatisfy({ windowBelongs($0, to: app) }) {
-            return ScreenSourceBinding(
-                kind: .application,
-                displayID: displayID(for: target, displays: content.displays),
-                bundleIdentifier: app.bundleIdentifier,
-                applicationName: app.applicationName,
-                processID: app.processID,
-                windowID: nil,
-                windowTitle: nil
-            )
-        }
-
-        return ScreenSourceBinding(
-            kind: .window,
-            displayID: displayID(for: target, displays: content.displays),
-            bundleIdentifier: app.bundleIdentifier,
-            applicationName: app.applicationName,
-            processID: app.processID,
-            windowID: target.windowID,
-            windowTitle: target.title
-        )
+        return nil
     }
 
     @available(macOS 15.2, *)

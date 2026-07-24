@@ -55,19 +55,11 @@ enum AudioCaptureSessionCleanup {
 }
 
 enum SystemAudioStreamConfiguration {
-    static func contentFilter(settings: RecordingSettings) async throws -> SCContentFilter {
-        let content = try await SCShareableContent.current
-        guard let display = ScreenCaptureGeometry.display(from: content.displays, settings: settings) else {
-            throw RecorderError.noDisplay
+    static func contentFilter(_ pickedFilter: SCContentFilter?) throws -> SCContentFilter {
+        guard let pickedFilter else {
+            throw RecorderError.screenCapturePermissionRequired
         }
-
-        let ownProcess = getpid()
-        let excludedApplications = content.applications.filter { $0.processID == ownProcess }
-        return SCContentFilter(
-            display: display,
-            excludingApplications: excludedApplications,
-            exceptingWindows: []
-        )
+        return pickedFilter
     }
 
     static func configuration(streamName: String) -> SCStreamConfiguration {

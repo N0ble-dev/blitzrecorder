@@ -21,6 +21,10 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
     private var startupTimeoutTask: Task<Void, Never>?
     private var hasProducedStartupFrame = false
 
+    var activeScreenCaptureStream: SCStream? {
+        stream
+    }
+
     func start(
         url: URL,
         settings: RecordingSettings,
@@ -297,13 +301,6 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
             for: settings,
             sourceAspectRatio: screenSourceGeometry.aspectRatio()
         )
-        let contentRect = SCShareableContent.info(for: filter).contentRect
-        let sourceBounds = CGRect(
-            x: 0,
-            y: 0,
-            width: max(2, contentRect.width),
-            height: max(2, contentRect.height)
-        )
         let configuration = SCStreamConfiguration()
         configuration.width = dimensions.width
         configuration.height = dimensions.height
@@ -315,7 +312,12 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
             configuration.showMouseClicks = true
         }
         configuration.capturesAudio = false
-        configuration.sourceRect = screenSourceGeometry.sourceRect(in: sourceBounds)
+        if let sourceRect = ScreenCaptureGeometry.pickedSourceRect(request: .init(
+            settings: settings,
+            filter: filter
+        )) {
+            configuration.sourceRect = sourceRect
+        }
         let backgroundColor = settings.canvasBackgroundStyle.appearance.solidCGColor
         streamBackgroundColor = backgroundColor
         configuration.backgroundColor = backgroundColor

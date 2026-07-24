@@ -104,6 +104,47 @@ final class RecordingTranscriptTests: XCTestCase {
         )
         XCTAssertTrue(transcript.formattedText.contains("[00:00] Speaker 1"))
         XCTAssertTrue(transcript.formattedText.contains("[00:02] Speaker 2"))
+        XCTAssertTrue(transcript.markdownText.contains("# client-interview"))
+        XCTAssertTrue(transcript.markdownText.contains("## Transcript"))
+        XCTAssertTrue(transcript.markdownText.contains("**[00:00] Speaker 1:**"))
+    }
+
+    func testMarkdownTranscriptIncludesSpeakerNamesAndContext() {
+        let transcript = RecordingTranscript(
+            version: 1,
+            id: UUID(),
+            mediaPath: "/tmp/demo.mov",
+            generatedAt: Date(timeIntervalSince1970: 1_000),
+            duration: 3,
+            confidence: 0.9,
+            text: "Hello",
+            suggestedTitle: "Demo *call*",
+            speakers: [
+                RecordingTranscript.Speaker(
+                    id: "Speaker 1",
+                    name: "Alex",
+                    context: "Host"
+                )
+            ],
+            segments: [
+                RecordingTranscript.Segment(
+                    id: UUID(),
+                    speakerID: "Speaker 1",
+                    startTime: 1,
+                    endTime: 2,
+                    text: "Hello",
+                    confidence: 0.9
+                )
+            ]
+        )
+
+        XCTAssertTrue(transcript.markdownText.contains("# Demo \\*call\\*"))
+        XCTAssertTrue(transcript.markdownText.contains("- **Alex** — Host"))
+        XCTAssertTrue(transcript.markdownText.contains("**[00:01] Alex:** Hello"))
+        XCTAssertTrue(
+            transcript.markdownText(title: "Visible project title")
+                .hasPrefix("# Visible project title")
+        )
     }
 
     func testAssemblerAssignsBoundaryWordToNearestSpeakerInterval() {

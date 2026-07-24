@@ -3,14 +3,22 @@ import XCTest
 
 @MainActor
 final class RecorderViewModelWindowFitTests: XCTestCase {
-    func testWindowCloseCancelsScheduledTargetWindowFit() {
+    func testWindowCloseCancelsPendingUiScaleResize() {
         let suiteName = "RecorderViewModelWindowFitTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         var settings = RecordingSettings()
         settings.enabledSources = [.screen]
-        settings.screenSourceBinding = .display(id: "display-1")
+        settings.screenSourceBinding = ScreenSourceBinding(
+            kind: .window,
+            displayID: nil,
+            bundleIdentifier: "com.google.Chrome",
+            applicationName: "Google Chrome",
+            processID: nil,
+            windowID: 1,
+            windowTitle: "Example"
+        )
         RecordingSettingsStore.save(settings, defaults: defaults)
 
         let viewModel = RecorderViewModel(
@@ -21,7 +29,7 @@ final class RecorderViewModelWindowFitTests: XCTestCase {
             previewStage: PreviewStageView()
         )
 
-        viewModel.setTargetWindowZoom(0.5)
+        viewModel.setTargetWindowZoom(1.5)
         XCTAssertTrue(viewModel.hasScheduledTargetWindowFit)
 
         viewModel.prepareForWindowClose()
@@ -29,7 +37,7 @@ final class RecorderViewModelWindowFitTests: XCTestCase {
         XCTAssertFalse(viewModel.hasScheduledTargetWindowFit)
     }
 
-    func testWindowZoomCanMakeSourceWindowWiderThanCanvasSlot() {
+    func testUiScaleSupportsTwoXAndSchedulesPhysicalWindowResize() {
         let suiteName = "RecorderViewModelWindowFitTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -55,12 +63,13 @@ final class RecorderViewModelWindowFitTests: XCTestCase {
             previewStage: PreviewStageView()
         )
 
-        viewModel.setTargetWindowZoom(0.5)
+        viewModel.setTargetWindowZoom(2)
 
-        XCTAssertEqual(viewModel.targetWindowZoom, 0.5)
+        XCTAssertEqual(viewModel.targetWindowZoom, 2)
         XCTAssertEqual(
             RecordingSettingsStore.load(defaults: defaults).screenWindowZoom,
-            0.5
+            2
         )
+        XCTAssertTrue(viewModel.hasScheduledTargetWindowFit)
     }
 }

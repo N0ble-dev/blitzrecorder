@@ -19,7 +19,7 @@ final class FinalExportPlanTests: XCTestCase {
         XCTAssertEqual(plan.duration.seconds, 1, accuracy: 0.0001)
     }
 
-    func testPlanUsesAssetExportSessionForCanvasAwareSceneEvent() throws {
+    func testPlanUsesOptimizedWriterForCanvasAwareSceneEvent() throws {
         var settings = RecordingSettings()
         settings.enabledSources = [.screen]
         var changedSettings = settings
@@ -31,7 +31,7 @@ final class FinalExportPlanTests: XCTestCase {
             sources: [source(.screen, duration: 1)]
         )
 
-        XCTAssertEqual(plan.engine, .assetExportSession)
+        XCTAssertEqual(plan.engine, .optimizedWriter)
     }
 
     func testPlanUsesOptimizedWriterForCustomExportQuality() throws {

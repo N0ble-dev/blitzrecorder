@@ -110,6 +110,9 @@ struct SourcesSidebar: View {
 
         switch source {
         case .screen:
+            if !vm.hasActiveScreenPickerSelection {
+                return SourceRowStatus(label: "Choose", tone: .warning)
+            }
             if vm.settings.usesPickedScreenContent {
                 return SourceRowStatus(label: "Picked", tone: .active)
             }
@@ -485,7 +488,13 @@ private struct ScreenSourceInspector: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             captureSourceRow
-            ScreenSourceFramingControl(vm: vm, enabled: enabled)
+            if enabled && vm.hasActiveScreenPickerSelection {
+                if vm.supportsScreenWindowScaling {
+                    ScreenSourceFramingControl(vm: vm, enabled: enabled)
+                } else {
+                    ScreenContentModeControl(vm: vm, enabled: enabled)
+                }
+            }
         }
         .settingsPanelStyle()
     }
@@ -495,7 +504,7 @@ private struct ScreenSourceInspector: View {
             inspectorLabel("Source", enabled: enabled)
 
             BlitzSourcePicker(model: pickerModel)
-            .help("Choose a display, app, or window")
+            .help("Choose a display or window")
         }
     }
 
@@ -531,32 +540,23 @@ private struct ScreenSourceInspector: View {
     }
 
     private var pickerModel: BlitzSourcePickerModel {
-        var actions: [BlitzSourcePickerItem] = []
-        if vm.shouldShowAppWindowSourcePermissionHint {
-            actions.append(
-                BlitzSourcePickerItem(
-                    title: "Enable Screen Recording",
-                    subtitle: "Required to list apps and windows",
-                    systemImage: "lock.open",
-                    icon: nil,
-                    thumbnail: nil,
-                    isSelected: false
-                ) {
-                    vm.applyScreenRecordingPermission()
-                }
-            )
-        }
+        let actions = [BlitzSourcePickerItem(
+            title: "Choose Display or Window",
+            subtitle: "Uses the private macOS picker",
+            systemImage: "rectangle.dashed",
+            icon: nil,
+            thumbnail: nil,
+            isSelected: vm.hasActiveScreenPickerSelection
+        ) {
+            vm.pickScreen()
+        }]
 
         return BlitzSourcePickerModel(
             title: captureSourceLabel,
             subtitle: selectedScreenSourceKindLabel,
             systemImage: selectedScreenSourceSystemImage,
             icon: selectedScreenSourceIcon,
-            sections: [
-                screenSourceSection((kind: .application, title: "Apps")),
-                screenSourceSection((kind: .window, title: "Windows")),
-                screenSourceSection((kind: .display, title: "Displays"))
-            ],
+            sections: [],
             actions: actions,
             layout: .thumbnails,
             enabled: enabled && vm.canAdjustScreenCapture
@@ -586,6 +586,9 @@ private struct ScreenSourceInspector: View {
     }
 
     private var selectedScreenSourceKindLabel: String {
+        if !vm.hasActiveScreenPickerSelection {
+            return "Picker selection required"
+        }
         if vm.settings.usesPickedScreenContent {
             return "Screen capture"
         }
@@ -600,122 +603,177 @@ private struct ScreenSourceInspector: View {
     }
 }
 
-private struct ScreenSourceFramingControl: View {
-    private struct AppContentSizeButtonRequest {
-        let title: String
-        let icon: String
-        let action: () -> Void
-    }
-
+struct ScreenContentModeControl: View {
     @Bindable var vm: RecorderViewModel
     let enabled: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text("Window zoom")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(enabled ? 0.82 : 0.38))
+        VStack(alignment: .leading, spacing: 7) {
+            inspectorLabel("Screen framing", enabled: enabled)
 
-                Spacer(minLength: 0)
-
-                Text("\(Int((vm.targetWindowZoom * 100).rounded()))%")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .monospacedDigit()
-                    .foregroundStyle(.white.opacity(enabled ? 0.7 : 0.32))
-            }
-
-            Slider(
-                value: Binding(
-                    get: { Double(vm.targetWindowZoom) },
-                    set: { vm.setTargetWindowZoom(CGFloat($0)) }
-                ),
-                in: WindowZoomGeometry.minimumZoom...WindowZoomGeometry.maximumZoom,
-                step: 0.05,
-                onEditingChanged: { editing in
-                    if !editing { vm.fitCurrentScreenWindowToSlot() }
-                }
-            )
-            .controlSize(.small)
-            .tint(BlitzUI.mint)
-            .disabled(!canUseWindowControls)
-
-            HStack {
-                Text("50%")
-                Spacer(minLength: 0)
-                Button("Reset") {
-                    vm.resetTargetWindowZoom()
-                }
-                .font(.system(size: 11, weight: .semibold))
-                .buttonStyle(.plain)
-                .foregroundStyle(BlitzUI.mint.opacity(canUseWindowControls ? 0.82 : 0.3))
-                .disabled(!canUseWindowControls || abs(vm.targetWindowZoom - 1) < 0.001)
-                Spacer(minLength: 0)
-                Text("150%")
-            }
-            .font(.system(size: 9, weight: .medium, design: .monospaced))
-            .monospacedDigit()
-            .foregroundStyle(.white.opacity(enabled ? 0.4 : 0.22))
-
-            if supportsWindowControls {
-                Divider()
-
-                if vm.canShowScreenWindowFitControls {
-                    windowFitControl
-                    appContentSizeControl
-                } else {
-                    enableWindowFitButton
-                }
+            HStack(spacing: 7) {
+                modeButton(.fill, title: "Fill frame", detail: "Crop edges")
+                modeButton(.fit, title: "Show all", detail: "No crop")
             }
         }
         .opacity(enabled ? 1 : 0.55)
     }
 
-    private var windowFitControl: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text("Window fit")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.72))
+    private func modeButton(
+        _ mode: CameraContentMode,
+        title: String,
+        detail: String
+    ) -> some View {
+        let selected = vm.settings.screenContentMode == mode
+        return Button {
+            vm.setScreenContentMode(mode)
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: mode.symbolName)
+                    .font(.system(size: 11, weight: .bold))
+                    .frame(width: 17)
 
-            Button {
-                vm.fitCurrentScreenWindowToSlot()
-            } label: {
-                Label("Fit source window to frame", systemImage: "rectangle.arrowtriangle.2.inward")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.82))
-                    .frame(maxWidth: .infinity, minHeight: 40)
-                    .contentShape(.rect(cornerRadius: 9))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.system(size: 10.5, weight: .bold))
+                    Text(detail)
+                        .font(.system(size: 8.5, weight: .medium))
+                        .opacity(0.58)
+                }
+
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.plain)
-            .background(BlitzUI.controlFill, in: .rect(cornerRadius: 9))
-            .disabled(!canUseWindowControls)
-            .pointingHandCursor()
+            .foregroundStyle(selected ? BlitzUI.mint : .white.opacity(0.78))
+            .padding(.horizontal, 9)
+            .frame(maxWidth: .infinity, minHeight: 43)
+            .contentShape(.rect(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .background(
+            selected ? BlitzUI.mint.opacity(0.12) : BlitzUI.controlFill,
+            in: .rect(cornerRadius: 8)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(selected ? BlitzUI.mint.opacity(0.72) : .white.opacity(0.08), lineWidth: 1)
+        }
+        .disabled(!enabled || !vm.canEditScene)
+        .pointingHandCursor()
+        .accessibilityLabel(title)
+        .accessibilityValue(selected ? "Selected" : "Not selected")
+        .help(mode == .fill
+            ? "Fill the entire frame. Source edges can be cropped."
+            : "Keep the entire source visible without cropping.")
+    }
+}
+
+private struct ScreenSourceFramingControl: View {
+    @Bindable var vm: RecorderViewModel
+    let enabled: Bool
+
+    @ViewBuilder
+    var body: some View {
+        if vm.supportsScreenWindowScaling {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text("Make UI larger")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(enabled ? 0.82 : 0.38))
+
+                    Spacer(minLength: 0)
+
+                    Text("\(Int((vm.targetWindowZoom * 100).rounded()))%")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .monospacedDigit()
+                        .foregroundStyle(.white.opacity(enabled ? 0.7 : 0.32))
+                }
+
+                Slider(
+                    value: Binding(
+                        get: { Double(vm.targetWindowZoom) },
+                        set: { vm.setTargetWindowZoom(CGFloat($0)) }
+                    ),
+                    in: ScreenSourceZoomGeometry.minimumZoom...ScreenSourceZoomGeometry.maximumZoom,
+                    step: 0.05,
+                    onEditingChanged: { editing in
+                        if !editing {
+                            vm.applyTargetWindowZoom()
+                        }
+                    }
+                )
+                .controlSize(.small)
+                .tint(BlitzUI.mint)
+                .disabled(!canUseWindowControls)
+                .help("Resize and reflow the source window while keeping its complete UI visible")
+
+                HStack(spacing: 8) {
+                    Text("Normal")
+                    Spacer(minLength: 0)
+                    Button {
+                        vm.resetTargetWindowZoom()
+                    } label: {
+                        Label("Reset", systemImage: "arrow.counterclockwise")
+                            .font(.system(size: 10, weight: .bold))
+                            .padding(.horizontal, 9)
+                            .frame(minHeight: 26)
+                            .contentShape(.rect(cornerRadius: 7))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white.opacity(canUseWindowControls ? 0.78 : 0.3))
+                    .background(BlitzUI.controlFill, in: .rect(cornerRadius: 7))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(.white.opacity(0.09), lineWidth: 1)
+                    }
+                    .disabled(!canUseWindowControls || abs(vm.targetWindowZoom - 1) < 0.001)
+                    .pointingHandCursor()
+                    Spacer(minLength: 0)
+                    Text("2× larger")
+                }
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.white.opacity(enabled ? 0.4 : 0.22))
+
+                if vm.canShowScreenWindowFitControls {
+                    windowFitControl
+                } else {
+                    enableWindowFitButton
+                }
+            }
+            .opacity(enabled ? 1 : 0.55)
         }
     }
 
-    private var appContentSizeControl: some View {
+    private var windowFitControl: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("App content size")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.72))
-
-            HStack(spacing: 6) {
-                appContentSizeButton(AppContentSizeButtonRequest(
-                    title: "Smaller",
-                    icon: "minus",
-                    action: vm.zoomScreenSourceContentOut
-                ))
-                appContentSizeButton(AppContentSizeButtonRequest(
-                    title: "Reset",
-                    icon: "arrow.counterclockwise",
-                    action: vm.resetScreenSourceContentZoom
-                ))
-                appContentSizeButton(AppContentSizeButtonRequest(
-                    title: "Larger",
-                    icon: "plus",
-                    action: vm.zoomScreenSourceContentIn
-                ))
+            Button {
+                vm.fitCurrentScreenWindowToSlot()
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: "rectangle.arrowtriangle.2.inward")
+                        .font(.system(size: 13, weight: .semibold))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Fit full window")
+                            .font(.system(size: 11, weight: .bold))
+                        Text("Full width + height, no crop")
+                            .font(.system(size: 9, weight: .medium))
+                            .opacity(0.58)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.white.opacity(0.86))
+                .padding(.horizontal, 11)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .contentShape(.rect(cornerRadius: 9))
             }
+            .buttonStyle(.plain)
+            .background(BlitzUI.mint.opacity(0.12), in: .rect(cornerRadius: 9))
+            .overlay {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(BlitzUI.mint.opacity(0.48), lineWidth: 1)
+            }
+            .disabled(!canUseWindowControls)
+            .pointingHandCursor()
+            .help("Resize and reflow the complete source window inside its canvas frame")
         }
     }
 
@@ -743,36 +801,8 @@ private struct ScreenSourceFramingControl: View {
         .help("Open the Accessibility guide for window fitting")
     }
 
-    private func appContentSizeButton(
-        _ request: AppContentSizeButtonRequest
-    ) -> some View {
-        Button(action: request.action) {
-            Label(request.title, systemImage: request.icon)
-                .font(.system(size: 10, weight: .semibold))
-                .frame(maxWidth: .infinity, minHeight: 40)
-                .contentShape(.rect(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.white.opacity(canUseWindowControls ? 0.78 : 0.3))
-        .background(BlitzUI.controlFill, in: .rect(cornerRadius: 8))
-        .disabled(!canUseWindowControls)
-        .pointingHandCursor()
-    }
-
     private var canUseWindowControls: Bool {
         enabled && vm.canAdjustScreenCapture && vm.canShowScreenWindowFitControls
-    }
-
-    private var supportsWindowControls: Bool {
-        if vm.settings.usesPickedScreenContent {
-            return true
-        }
-        switch vm.settings.screenSourceBinding?.kind {
-        case .application, .window:
-            return true
-        case .display, nil:
-            return false
-        }
     }
 }
 

@@ -3,6 +3,7 @@ import AVFoundation
 import CoreImage
 import QuartzCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 private struct EditorToolbarPressButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
@@ -27,6 +28,11 @@ private enum EditorInspectorTab: String, CaseIterable {
     }
 }
 
+private struct EditorExportPresetRequest {
+    let preset: ExportPerformancePreset
+    let project: RecordingProject
+}
+
 struct EditorView: View {
     @Bindable var vm: RecorderViewModel
     @State private var library = EditorMediaLibrary()
@@ -35,7 +41,10 @@ struct EditorView: View {
     @State private var selection: EditorSelection?
     @State private var selectedFormat: OutputVideoFormat = .mov
     @State private var selectedResolution: OutputResolution = .p1080
+    @State private var selectedExportFramesPerSecond = 60
     @State private var selectedExportQuality: ExportVideoQuality = .high
+    @State private var selectedExportPreset: ExportPerformancePreset = .balanced
+    @State private var backgroundMusic: ExportBackgroundMusic?
     @State private var isExportPopoverPresented = false
     @State private var reloadTask: Task<Void, Never>?
     @State private var sceneEvents: [RecordingSceneEvent] = []
@@ -107,6 +116,7 @@ struct EditorView: View {
             .background(Color.white.opacity(0.018))
         }
         .task(id: vm.lastExportedSourceTakeURL) {
+            backgroundMusic = nil
             vm.refreshLastExportedProject()
             reloadTask?.cancel()
             let task = Task { await reloadProject() }
@@ -171,7 +181,7 @@ struct EditorView: View {
         } else {
             selectedFormat = vm.settings.outputVideoFormat
         }
-        selectedResolution = sourceResolution(for: project)
+        applyExportPreset(EditorExportPresetRequest(preset: .balanced, project: project))
         assets = EditorAsset.assets(project: project, finalVideoURL: vm.lastExportedURL)
         async let media: Void = library.loadAssets(assets)
         await playback.load(project: project, baseSettings: vm.settings)
@@ -190,7 +200,7 @@ struct EditorView: View {
         } else {
             selectedFormat = vm.settings.outputVideoFormat
         }
-        selectedResolution = sourceResolution(for: project)
+        applyExportPreset(EditorExportPresetRequest(preset: .balanced, project: project))
         assets = EditorAsset.assets(project: project, finalVideoURL: vm.lastExportedURL)
 
         let refreshed = playback.refreshSceneTimeline(EditorPlaybackSceneTimelineUpdate(
@@ -412,6 +422,15 @@ struct EditorView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
+                exportSectionLabel("PERFORMANCE")
+                HStack(spacing: 6) {
+                    ForEach(ExportPerformancePreset.allCases, id: \.rawValue) { preset in
+                        exportPerformancePresetButton(preset)
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
                 exportSectionLabel("FORMAT")
                 HStack(spacing: 6) {
                     ForEach(OutputVideoFormat.allCases, id: \.rawValue) { format in
@@ -430,6 +449,15 @@ struct EditorView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
+                exportSectionLabel("FRAME RATE")
+                HStack(spacing: 6) {
+                    ForEach([30, 60], id: \.self) { framesPerSecond in
+                        exportFrameRateButton(framesPerSecond)
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
                 exportSectionLabel("QUALITY")
                 HStack(spacing: 6) {
                     ForEach(ExportVideoQuality.allCases, id: \.rawValue) { quality in
@@ -440,6 +468,21 @@ struct EditorView: View {
                 Text(selectedExportQuality.plainDescription)
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(.white.opacity(0.46))
+            }
+
+            if let backgroundMusic {
+                HStack(spacing: 8) {
+                    Image(systemName: "music.note")
+                        .foregroundStyle(BlitzUI.mint.opacity(0.82))
+                    Text("\(backgroundMusic.url.lastPathComponent) · \(musicVolumeLabel)")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.62))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .padding(.horizontal, 10)
+                .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+                .background(Color.white.opacity(0.045), in: .rect(cornerRadius: 8))
             }
 
             HStack(spacing: 8) {
@@ -501,6 +544,31 @@ struct EditorView: View {
         .pointingHandCursor()
     }
 
+    private func exportPerformancePresetButton(_ preset: ExportPerformancePreset) -> some View {
+        let selected = preset == selectedExportPreset
+        return Button {
+            guard let project else { return }
+            if preset == .maximum,
+               sourceResolution(for: project) == .p2160,
+               !vm.accessController.canUse4KExport {
+                _ = vm.accessController.requirePaidFeature("4K export")
+                return
+            }
+            applyExportPreset(EditorExportPresetRequest(preset: preset, project: project))
+        } label: {
+            Text(preset.displayName)
+                .font(.system(size: 10.5, weight: .bold))
+                .foregroundStyle(selected ? Color.black.opacity(0.84) : Color.white.opacity(0.66))
+                .frame(maxWidth: .infinity, minHeight: 36)
+                .background(
+                    selected ? BlitzUI.mint : Color.white.opacity(0.055),
+                    in: .rect(cornerRadius: 7)
+                )
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+    }
+
     private func exportResolutionButton(_ resolution: OutputResolution) -> some View {
         let selected = resolution == selectedResolution
         let locked = resolution == .p2160 && !vm.accessController.canUse4KExport
@@ -510,6 +578,7 @@ struct EditorView: View {
                 return
             }
             selectedResolution = resolution
+            selectedExportPreset = .custom
         } label: {
             HStack(spacing: 4) {
                 if locked {
@@ -530,10 +599,30 @@ struct EditorView: View {
         .pointingHandCursor()
     }
 
+    private func exportFrameRateButton(_ framesPerSecond: Int) -> some View {
+        let selected = framesPerSecond == selectedExportFramesPerSecond
+        return Button {
+            selectedExportFramesPerSecond = framesPerSecond
+            selectedExportPreset = .custom
+        } label: {
+            Text("\(framesPerSecond) fps")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(selected ? Color.black.opacity(0.84) : Color.white.opacity(0.66))
+                .frame(maxWidth: .infinity, minHeight: 36)
+                .background(
+                    selected ? BlitzUI.mint : Color.white.opacity(0.055),
+                    in: .rect(cornerRadius: 7)
+                )
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+    }
+
     private func exportQualityButton(_ quality: ExportVideoQuality) -> some View {
         let selected = quality == selectedExportQuality
         return Button {
             selectedExportQuality = quality
+            selectedExportPreset = .custom
         } label: {
             Text(quality.displayName)
                 .font(.system(size: 11, weight: .bold))
@@ -549,7 +638,18 @@ struct EditorView: View {
     }
 
     private var exportFrameRate: Int {
-        project?.settings.framesPerSecond ?? vm.settings.framesPerSecond
+        selectedExportFramesPerSecond
+    }
+
+    private var exportPerformanceProfile: ExportPerformanceProfile {
+        ExportPerformanceProfile.resolved(
+            preset: selectedExportPreset,
+            sourceResolution: project.map { sourceResolution(for: $0) } ?? vm.settings.outputResolution,
+            sourceFramesPerSecond: project?.settings.framesPerSecond ?? vm.settings.framesPerSecond,
+            customResolution: selectedResolution,
+            customFramesPerSecond: selectedExportFramesPerSecond,
+            customVideoQuality: selectedExportQuality
+        )
     }
 
     private var exportBitrate: Int {
@@ -573,14 +673,35 @@ struct EditorView: View {
     }
 
     private func exportVideo() {
+        let profile = exportPerformanceProfile
+        if profile.resolution == .p2160, !vm.accessController.canUse4KExport {
+            _ = vm.accessController.requirePaidFeature("4K export")
+            return
+        }
         isExportPopoverPresented = false
         vm.exportLastProject(EditorExportRequest(
             outputFormat: selectedFormat,
-            outputResolution: selectedResolution,
-            videoQuality: selectedExportQuality,
+            performanceProfile: profile,
             hiddenVideoSources: playback.hiddenKinds,
-            mutedAudioSources: playback.mutedSources
+            mutedAudioSources: playback.mutedSources,
+            backgroundMusic: backgroundMusic
         ))
+    }
+
+    private func applyExportPreset(_ request: EditorExportPresetRequest) {
+        let sourceResolution = sourceResolution(for: request.project)
+        let profile = ExportPerformanceProfile.resolved(
+            preset: request.preset,
+            sourceResolution: sourceResolution,
+            sourceFramesPerSecond: request.project.settings.framesPerSecond,
+            customResolution: selectedResolution,
+            customFramesPerSecond: selectedExportFramesPerSecond,
+            customVideoQuality: selectedExportQuality
+        )
+        selectedExportPreset = request.preset
+        selectedResolution = profile.resolution
+        selectedExportFramesPerSecond = profile.framesPerSecond
+        selectedExportQuality = profile.videoQuality
     }
 
     private var editorExportProgressBar: some View {
@@ -1608,6 +1729,8 @@ struct EditorView: View {
         VStack(alignment: .leading, spacing: 10) {
             BlitzUI.sectionLabel("Audio tracks", icon: "waveform")
 
+            backgroundMusicControl
+
             ForEach(assets.filter { $0.kind == .microphone || $0.kind == .systemAudio }) { asset in
                 let isMuted = mutedAssetIDs.contains(asset.id)
                 HStack(spacing: 10) {
@@ -1637,6 +1760,90 @@ struct EditorView: View {
                 .background(BlitzUI.quietFill, in: .rect(cornerRadius: 10))
             }
         }
+    }
+
+    private var backgroundMusicControl: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                BlitzIconTile(symbolName: "music.note", isSelected: backgroundMusic != nil, size: 30)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(backgroundMusic?.url.lastPathComponent ?? "Background music")
+                        .font(.system(size: 11.5, weight: .bold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(backgroundMusic == nil ? "Optional" : "Loops through the full export")
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.42))
+                }
+                Spacer(minLength: 0)
+                Button {
+                    if backgroundMusic == nil {
+                        chooseBackgroundMusic()
+                    } else {
+                        backgroundMusic = nil
+                    }
+                } label: {
+                    Image(systemName: backgroundMusic == nil ? "plus" : "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 28, height: 26)
+                }
+                .buttonStyle(.plain)
+                .background(BlitzUI.controlFill, in: .rect(cornerRadius: 7))
+                .pointingHandCursor()
+                .help(backgroundMusic == nil ? "Choose an audio file" : "Remove background music")
+            }
+
+            if backgroundMusic != nil {
+                HStack(spacing: 8) {
+                    Image(systemName: "speaker.wave.1")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.52))
+                    Slider(value: backgroundMusicVolumeBinding, in: 0...1, step: 0.01)
+                        .controlSize(.small)
+                        .tint(BlitzUI.mint)
+                    Text(musicVolumeLabel)
+                        .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                        .monospacedDigit()
+                        .foregroundStyle(.white.opacity(0.62))
+                        .frame(width: 36, alignment: .trailing)
+                }
+
+                Text("Mixed during export with a smooth fade-out.")
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.42))
+            }
+        }
+        .padding(10)
+        .background(BlitzUI.quietFill, in: .rect(cornerRadius: 10))
+    }
+
+    private var backgroundMusicVolumeBinding: Binding<Double> {
+        Binding(
+            get: { backgroundMusic?.volume ?? 0.18 },
+            set: { volume in
+                guard let selection = backgroundMusic else { return }
+                backgroundMusic = ExportBackgroundMusic(
+                    url: selection.url,
+                    volume: min(1, max(0, volume))
+                )
+            }
+        )
+    }
+
+    private var musicVolumeLabel: String {
+        "\(Int(((backgroundMusic?.volume ?? 0) * 100).rounded()))%"
+    }
+
+    private func chooseBackgroundMusic() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.audio]
+        panel.prompt = "Use Music"
+        panel.message = "Choose background music to loop under this export."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        backgroundMusic = ExportBackgroundMusic(url: url, volume: 0.18)
     }
 
     private var canDeleteSelectedCut: Bool {

@@ -1,11 +1,20 @@
 import Foundation
 import ScreenCaptureKit
 
+enum ScreenContentPickerPresentationMode {
+    case newSelection
+    case updateActiveStream
+
+    static func resolve(hasActiveStream: Bool) -> Self {
+        hasActiveStream ? .updateActiveStream : .newSelection
+    }
+}
+
 @MainActor
 final class ScreenContentPicker: NSObject, @preconcurrency SCContentSharingPickerObserver {
     private var continuation: CheckedContinuation<SCContentFilter, Error>?
 
-    func pick() async throws -> SCContentFilter {
+    func pick(for activeStream: SCStream? = nil) async throws -> SCContentFilter {
         guard continuation == nil else {
             throw RecorderError.screenSelectionInProgress
         }
@@ -18,7 +27,7 @@ final class ScreenContentPicker: NSObject, @preconcurrency SCContentSharingPicke
 
             let picker = SCContentSharingPicker.shared
             var configuration = SCContentSharingPickerConfiguration()
-            configuration.allowedPickerModes = [.singleDisplay, .singleWindow, .singleApplication]
+            configuration.allowedPickerModes = [.singleDisplay, .singleWindow]
             configuration.excludedBundleIDs = [Bundle.main.bundleIdentifier].compactMap { $0 }
             configuration.allowsChangingSelectedContent = true
 
@@ -26,7 +35,17 @@ final class ScreenContentPicker: NSObject, @preconcurrency SCContentSharingPicke
             picker.maximumStreamCount = 1
             picker.isActive = true
             picker.add(self)
-            picker.present()
+            switch ScreenContentPickerPresentationMode.resolve(hasActiveStream: activeStream != nil) {
+            case .newSelection:
+                picker.present()
+            case .updateActiveStream:
+                guard let activeStream else {
+                    picker.present()
+                    return
+                }
+                picker.setConfiguration(configuration, for: activeStream)
+                picker.present(for: activeStream)
+            }
         }
     }
 

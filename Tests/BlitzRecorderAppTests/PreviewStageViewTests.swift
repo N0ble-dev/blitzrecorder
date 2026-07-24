@@ -370,6 +370,7 @@ final class PreviewStageViewTests: XCTestCase {
         view.captureLayout = .vertical
         view.enabledSources = [.screen]
         view.canvasPadding = 0.12
+        view.screenContentMode = .fit
         view.sceneLayout = SceneLayout.presetLayout(.screenFullscreen, for: .vertical)
         view.layoutSubtreeIfNeeded()
 
@@ -527,6 +528,7 @@ final class PreviewStageViewTests: XCTestCase {
         view.captureLayout = .vertical
         view.enabledSources = [.screen, .camera]
         view.canvasPadding = 0.12
+        view.screenContentMode = .fit
         view.sceneLayout = SceneLayout.presetLayout(.stackedHalves, for: .vertical)
         view.layoutSubtreeIfNeeded()
 
@@ -575,6 +577,7 @@ final class PreviewStageViewTests: XCTestCase {
         view.captureLayout = .horizontal
         view.enabledSources = [.screen, .camera]
         view.canvasPadding = 0.12
+        view.screenContentMode = .fit
         view.screenSourceAspectRatio = 9.0 / 19.5
         view.sceneLayout = SceneLayout.presetLayout(.webcamLeft, for: .horizontal)
         view.layoutSubtreeIfNeeded()
@@ -599,6 +602,7 @@ final class PreviewStageViewTests: XCTestCase {
         view.captureLayout = .vertical
         view.enabledSources = [.screen, .camera]
         view.canvasPadding = 0.12
+        view.screenContentMode = .fit
         view.sceneLayout = SceneLayout.presetLayout(.screenFocus, for: .vertical)
         view.layoutSubtreeIfNeeded()
 
@@ -613,6 +617,27 @@ final class PreviewStageViewTests: XCTestCase {
             view.renderedScreenFrameForTesting,
             equals: aspectFit(sourceAspectRatio: SceneLayout.defaultScreenAspectRatio, in: expectedScreenFrame)
         )
+    }
+
+    func testLandscapeScreenFillUsesFullPaddedCanvasHeight() {
+        let view = PreviewStageView()
+        view.frame = NSRect(x: 0, y: 0, width: 1000, height: 700)
+        view.captureLayout = .horizontal
+        view.enabledSources = [.screen]
+        view.canvasPadding = 0.1
+        view.screenContentMode = .fill
+        view.screenSourceAspectRatio = 4.0 / 3.0
+        view.sceneLayout = SceneLayout.presetLayout(.screenFullscreen, for: .horizontal)
+        view.layoutSubtreeIfNeeded()
+
+        let canvasFrame = view.renderedCanvasFrameForTesting
+        let expectedFrame = SceneLayoutProjection.padded(
+            canvasFrame,
+            in: canvasFrame,
+            padding: view.canvasPadding
+        )
+
+        XCTAssertRect(view.renderedScreenFrameForTesting, equals: expectedFrame)
     }
 }
 

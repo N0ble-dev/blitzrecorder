@@ -43,6 +43,10 @@ final class ScreenSourceSelection {
 
     private(set) var pickedContentFilter: SCContentFilter?
 
+    var hasActivePickedContent: Bool {
+        pickedContentFilter != nil
+    }
+
     func selectDisplay(_ request: DisplayRequest) -> RecordingSettings {
         var settings = request.settings
         settings.selectedDisplayID = request.id
@@ -95,20 +99,7 @@ final class ScreenSourceSelection {
     }
 
     func reconcile(_ request: ReconciliationRequest) -> ScreenSourceSelectionResult {
-        guard request.settings.usesPickedScreenContent,
-              pickedContentFilter == nil,
-              request.settings.screenSourceBinding?.isConcreteSelection == true,
-              request.hasPersistentAccess else {
-            return ScreenSourceSelectionResult(settings: request.settings, changed: false)
-        }
-
-        var settings = request.settings
-        settings.usesPickedScreenContent = false
-        if settings.screenSourceBinding?.kind == .display,
-           let displayID = settings.screenSourceBinding?.displayID {
-            settings.selectedDisplayID = displayID
-        }
-        return ScreenSourceSelectionResult(settings: settings, changed: true)
+        ScreenSourceSelectionResult(settings: request.settings, changed: false)
     }
 
     func snapshot(from settings: RecordingSettings) -> ScreenSourceSelectionSnapshot {

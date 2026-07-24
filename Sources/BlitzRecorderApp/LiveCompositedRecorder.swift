@@ -38,6 +38,10 @@ final class LiveCompositedRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
     var onCameraPreviewSampleBuffer: ((CMSampleBuffer, Int, Int) -> Void)?
     var onScreenPreviewFrame: ScreenPreviewer.FrameHandler?
 
+    var activeScreenCaptureStream: SCStream? {
+        screenStream
+    }
+
     func start(
         take: RecordingTake,
         settings: RecordingSettings,

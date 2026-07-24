@@ -136,7 +136,7 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
         XCTAssertNil(selection.pickedContentFilter)
     }
 
-    func testScreenSourceSelectionReconcilesExpiredPickerStateWithPersistentAccess() {
+    func testScreenSourceSelectionKeepsExpiredPickerStateUntilUserPicksAgain() {
         var settings = RecordingSettings()
         settings.usesPickedScreenContent = true
         settings.screenSourceBinding = .display(id: "display-2")
@@ -149,9 +149,28 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
             )
         )
 
-        XCTAssertTrue(result.changed)
+        XCTAssertFalse(result.changed)
+        XCTAssertTrue(result.settings.usesPickedScreenContent)
+        XCTAssertNil(result.settings.selectedDisplayID)
+    }
+
+    func testScreenSourceSelectionDoesNotActivateSavedScreenBinding() {
+        var settings = RecordingSettings()
+        settings.enabledSources = [.screen]
+        settings.screenSourceBinding = .display(id: "display-2")
+        let selection = ScreenSourceSelection()
+
+        let result = selection.reconcile(
+            ScreenSourceSelection.ReconciliationRequest(
+                settings: settings,
+                hasPersistentAccess: true
+            )
+        )
+
+        XCTAssertFalse(result.changed)
         XCTAssertFalse(result.settings.usesPickedScreenContent)
-        XCTAssertEqual(result.settings.selectedDisplayID, "display-2")
+        XCTAssertEqual(result.settings.screenSourceBinding, .display(id: "display-2"))
+        XCTAssertFalse(selection.hasActivePickedContent)
     }
 
     func testPermissionGateRequestsScreenAccessOnlyOncePerSession() {
@@ -392,7 +411,7 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
         XCTAssertEqual(viewModel.settings.screenSourceBinding, appBinding)
     }
 
-    func testScreenSourceToggleRestoresSavedApplicationWithoutPicker() {
+    func testDisablingScreenKeepsSavedBindingInactive() {
         let defaults = temporaryDefaults()
         let coordinator = RecorderCoordinator(
             accessController: AccessController(defaults: defaults),
@@ -415,12 +434,9 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
         viewModel.toggleSource(.screen)
         XCTAssertFalse(viewModel.isSourceConfigured(.screen))
 
-        viewModel.toggleSource(.screen)
-
-        XCTAssertTrue(viewModel.isSourceConfigured(.screen))
         XCTAssertEqual(viewModel.settings.screenSourceBinding, appBinding)
         XCTAssertFalse(viewModel.settings.usesPickedScreenContent)
-        XCTAssertEqual(viewModel.selectedSource, .screen)
+        XCTAssertFalse(coordinator.hasActivePickedScreenContent)
     }
 
     func testStartingStateClearsPostRecordingStatus() {
@@ -562,6 +578,40 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
         ))
     }
 
+    func testPersistentWindowSupportsScalingWithoutActivePickerSession() {
+        var settings = RecordingSettings()
+        settings.enabledSources = [.screen]
+        settings.screenSourceBinding = ScreenSourceBinding(
+            kind: .window,
+            displayID: nil,
+            bundleIdentifier: "com.apple.Safari",
+            applicationName: "Safari",
+            processID: nil,
+            windowID: 42,
+            windowTitle: "Landing Page"
+        )
+
+        XCTAssertTrue(RecorderViewModel.supportsScreenWindowScaling(
+            RecorderViewModel.ScreenWindowScalingSupportRequest(
+                settings: settings,
+                hasActivePickerSelection: false
+            )
+        ))
+    }
+
+    func testDisplayDoesNotSupportWindowScaling() {
+        var settings = RecordingSettings()
+        settings.enabledSources = [.screen]
+        settings.screenSourceBinding = .display(id: "display-1")
+
+        XCTAssertFalse(RecorderViewModel.supportsScreenWindowScaling(
+            RecorderViewModel.ScreenWindowScalingSupportRequest(
+                settings: settings,
+                hasActivePickerSelection: true
+            )
+        ))
+    }
+
     func testScreenWindowFitControlsShowForApplicationBindingWithAccessibility() {
         var settings = RecordingSettings()
         settings.enabledSources = [.screen]
@@ -587,6 +637,43 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
         var settings = RecordingSettings()
         settings.enabledSources = [.screen]
         settings.usesPickedScreenContent = true
+        settings.screenSourceBinding = ScreenSourceBinding(
+            kind: .window,
+            displayID: nil,
+            bundleIdentifier: "com.apple.Safari",
+            applicationName: "Safari",
+            processID: nil,
+            windowID: 42,
+            windowTitle: "Landing Page"
+        )
+
+        XCTAssertTrue(RecorderViewModel.canShowScreenWindowFitControls(
+            settings: settings,
+            targetWindowInfo: nil,
+            hasAccessibilityAccess: true,
+            canAdjustScreenCapture: true
+        ))
+    }
+
+    func testScreenWindowFitControlsHideForPickedDisplay() {
+        var settings = RecordingSettings()
+        settings.enabledSources = [.screen]
+        settings.usesPickedScreenContent = true
+        settings.screenSourceBinding = .display(id: "display-1")
+
+        XCTAssertFalse(RecorderViewModel.canShowScreenWindowFitControls(
+            settings: settings,
+            targetWindowInfo: nil,
+            hasAccessibilityAccess: true,
+            canAdjustScreenCapture: true
+        ))
+    }
+
+    func testScreenWindowFitControlsShowForLegacyPickedContentWithoutBinding() {
+        var settings = RecordingSettings()
+        settings.enabledSources = [.screen]
+        settings.usesPickedScreenContent = true
+        settings.screenSourceBinding = nil
 
         XCTAssertTrue(RecorderViewModel.canShowScreenWindowFitControls(
             settings: settings,
@@ -720,7 +807,7 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
         XCTAssertEqual(viewModel.screenCaptureAreaSelection, .activeWindow)
     }
 
-    func testSliderWindowZoomKeepsWindowModeSelected() {
+    func testUiScaleValuePreservesDisplayMode() {
         let defaults = temporaryDefaults()
         var settings = RecordingSettings()
         settings.enabledSources = [.screen]
@@ -736,12 +823,12 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
 
         viewModel.setTargetWindowZoom(1.25)
 
-        XCTAssertEqual(viewModel.screenCaptureAreaSelection, .activeWindow)
+        XCTAssertEqual(viewModel.screenCaptureAreaSelection, .fullDisplay)
         XCTAssertEqual(viewModel.targetWindowZoom, 1.25)
         XCTAssertEqual(RecordingSettingsStore.load(defaults: defaults).screenWindowZoom, 1.25)
     }
 
-    func testStepWindowZoomKeepsWindowModeSelected() {
+    func testStepUiScalePreservesDisplayMode() {
         let defaults = temporaryDefaults()
         var settings = RecordingSettings()
         settings.enabledSources = [.screen]
@@ -757,11 +844,11 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
 
         viewModel.zoomTargetWindowFit(by: 0.05)
 
-        XCTAssertEqual(viewModel.screenCaptureAreaSelection, .activeWindow)
+        XCTAssertEqual(viewModel.screenCaptureAreaSelection, .fullDisplay)
         XCTAssertEqual(viewModel.targetWindowZoom, 1.05, accuracy: 0.0001)
     }
 
-    func testResetWindowZoomKeepsWindowModeSelected() {
+    func testResetUiScalePreservesDisplayMode() {
         let defaults = temporaryDefaults()
         var settings = RecordingSettings()
         settings.enabledSources = [.screen]
@@ -778,7 +865,7 @@ final class RecorderCoordinatorAccessTests: XCTestCase {
         viewModel.setTargetWindowZoom(1.25)
         viewModel.resetTargetWindowZoom()
 
-        XCTAssertEqual(viewModel.screenCaptureAreaSelection, .activeWindow)
+        XCTAssertEqual(viewModel.screenCaptureAreaSelection, .fullDisplay)
         XCTAssertEqual(viewModel.targetWindowZoom, 1, accuracy: 0.0001)
     }
 

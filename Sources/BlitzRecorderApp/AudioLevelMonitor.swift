@@ -60,6 +60,11 @@ final class MicrophoneLevelMonitor: NSObject, AVCaptureAudioDataOutputSampleBuff
 }
 
 final class SystemAudioLevelMonitor: NSObject, SCStreamOutput, SCStreamDelegate {
+    struct StartRequest {
+        let settings: RecordingSettings
+        let pickedScreenFilter: SCContentFilter?
+    }
+
     private let queue = DispatchQueue(label: "blitzrecorder.system-audio-monitor")
     private var stream: SCStream?
     private let levelPublisher = AudioLevelPublisher()
@@ -68,10 +73,10 @@ final class SystemAudioLevelMonitor: NSObject, SCStreamOutput, SCStreamDelegate 
         set { levelPublisher.levelHandler = newValue }
     }
 
-    func start(settings: RecordingSettings) async throws {
+    func start(_ request: StartRequest) async throws {
         try await stop()
 
-        let filter = try await SystemAudioStreamConfiguration.contentFilter(settings: settings)
+        let filter = try SystemAudioStreamConfiguration.contentFilter(request.pickedScreenFilter)
         let configuration = SystemAudioStreamConfiguration.configuration(streamName: "BlitzRecorder System Audio Monitor")
         let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
         try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)

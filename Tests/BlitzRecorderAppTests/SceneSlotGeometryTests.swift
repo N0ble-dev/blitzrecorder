@@ -187,6 +187,21 @@ final class SceneSlotGeometryTests: XCTestCase {
         )
     }
 
+    func testTargetWindowFittingPlanCompactsWindowIntoPaddedFrame() {
+        let plan = TargetWindowFitting.plan(
+            screenFrame: CGRect(x: 0, y: 0, width: 1600, height: 900),
+            visibleFrame: CGRect(x: 0, y: 0, width: 1600, height: 900),
+            captureLayout: .horizontal,
+            screenSlot: CGRect(x: 0, y: 0, width: 1, height: 1),
+            canvasPadding: 0.1
+        )
+
+        XCTAssertRect(
+            plan.windowFrame,
+            equals: CGRect(x: 90, y: 90, width: 1420, height: 720)
+        )
+    }
+
     func testShortsTopHalfSlotMapsToUpperHalfOfVerticalCanvas() {
         let visibleFrame = CGRect(x: 0, y: 0, width: 1600, height: 900)
 

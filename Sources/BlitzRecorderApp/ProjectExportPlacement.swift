@@ -19,7 +19,12 @@ enum ProjectExportPlacement {
             ".blitzrecorder-export-\(UUID().uuidString).\(request.destinationURL.pathExtension)"
         )
         do {
-            try fileManager.copyItem(at: request.renderedURL, to: stagedURL)
+            do {
+                try fileManager.moveItem(at: request.renderedURL, to: stagedURL)
+            } catch {
+                try fileManager.copyItem(at: request.renderedURL, to: stagedURL)
+                try? fileManager.removeItem(at: request.renderedURL)
+            }
             if fileManager.fileExists(atPath: request.destinationURL.path) {
                 do {
                     _ = try fileManager.replaceItemAt(request.destinationURL, withItemAt: stagedURL)

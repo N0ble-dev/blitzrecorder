@@ -3,6 +3,27 @@ import CoreImage
 import CoreVideo
 import Metal
 
+struct LiveCompositorImageFrame {
+    let image: CIImage
+
+    init(image: CIImage) {
+        self.image = image
+    }
+
+    init(pixelBuffer: CVPixelBuffer) {
+        image = CIImage(cvPixelBuffer: pixelBuffer)
+    }
+}
+
+struct LiveCompositorImageRenderRequest {
+    let screenFrame: LiveCompositorImageFrame?
+    let cameraFrame: LiveCompositorImageFrame?
+    let scene: RecordingScene
+    let settings: RecordingSettings
+    let backgroundPhase: Double?
+    let outputBuffer: CVPixelBuffer
+}
+
 final class LiveCompositorRenderer: @unchecked Sendable {
     private static let backgroundFramesPerLoop = 96
 
@@ -25,29 +46,43 @@ final class LiveCompositorRenderer: @unchecked Sendable {
         backgroundPhase: Double? = nil,
         to outputBuffer: CVPixelBuffer
     ) -> Bool {
-        guard screenBuffer != nil || cameraBuffer != nil else {
+        render(LiveCompositorImageRenderRequest(
+            screenFrame: screenBuffer.map(LiveCompositorImageFrame.init),
+            cameraFrame: cameraBuffer.map(LiveCompositorImageFrame.init),
+            scene: scene,
+            settings: settings,
+            backgroundPhase: backgroundPhase,
+            outputBuffer: outputBuffer
+        ))
+    }
+
+    func render(_ request: LiveCompositorImageRenderRequest) -> Bool {
+        guard request.screenFrame != nil || request.cameraFrame != nil else {
             return false
         }
 
-        let dimensions = ScreenCaptureGeometry.outputDimensions(for: settings)
+        let dimensions = ScreenCaptureGeometry.outputDimensions(for: request.settings)
         let canvasRect = CGRect(x: 0, y: 0, width: dimensions.width, height: dimensions.height)
-        let geometry = SceneRenderGeometry(canvas: canvasRect, scene: scene, origin: .lowerLeft)
+        let geometry = SceneRenderGeometry(canvas: canvasRect, scene: request.scene, origin: .lowerLeft)
         var image = backgroundImage(
-            style: scene.canvasBackgroundStyle,
-            animationPhase: scene.canvasBackgroundAnimated && scene.canvasBackgroundStyle.supportsBackgroundAnimation ? backgroundPhase : nil,
+            style: request.scene.canvasBackgroundStyle,
+            animationPhase: request.scene.canvasBackgroundAnimated
+                && request.scene.canvasBackgroundStyle.supportsBackgroundAnimation
+                ? request.backgroundPhase
+                : nil,
             in: canvasRect
         )
 
         for placement in geometry.activePlacements {
-            let opacity = scene.sourceOpacity(for: placement.kind.source)
+            let opacity = request.scene.sourceOpacity(for: placement.kind.source)
             guard opacity > 0.001 else { continue }
             switch placement.kind {
             case .screen:
-                guard let screenBuffer else { continue }
-                if scene.screenShadowEnabled,
+                guard let screenFrame = request.screenFrame else { continue }
+                if request.scene.screenShadowEnabled,
                    !geometry.isVisibleSourceFullCanvas(
                        for: .screen,
-                       sourceAspectRatio: sourceAspectRatio(for: screenBuffer)
+                       sourceAspectRatio: sourceAspectRatio(for: screenFrame.image)
                    ) {
                     image = shadow(
                         for: placement.targetRect,
@@ -57,7 +92,7 @@ final class LiveCompositorRenderer: @unchecked Sendable {
                     .composited(over: image)
                 }
                 image = fill(
-                    CIImage(cvPixelBuffer: screenBuffer),
+                    screenFrame.image,
                     into: placement.targetRect,
                     sourceCrop: { placement.videoPlacement.sourceCropRectangle(sourceExtent: $0) },
                     contentMode: placement.videoPlacement.contentMode,
@@ -66,16 +101,16 @@ final class LiveCompositorRenderer: @unchecked Sendable {
                 .settingOpacity(opacity)
                 .composited(over: image)
             case .camera:
-                guard let cameraBuffer else { continue }
+                guard let cameraFrame = request.cameraFrame else { continue }
                 let visibleCameraRect = geometry.visibleSourceRect(
                     for: .camera,
-                    sourceAspectRatio: sourceAspectRatio(for: cameraBuffer)
+                    sourceAspectRatio: sourceAspectRatio(for: cameraFrame.image)
                 )
-                if scene.cameraShadowEnabled,
-                   cameraIsTopRenderedLayer(in: scene),
+                if request.scene.cameraShadowEnabled,
+                   cameraIsTopRenderedLayer(in: request.scene),
                    !geometry.isVisibleSourceFullCanvas(
                        for: .camera,
-                       sourceAspectRatio: sourceAspectRatio(for: cameraBuffer)
+                       sourceAspectRatio: sourceAspectRatio(for: cameraFrame.image)
                    ) {
                     image = shadow(
                         for: visibleCameraRect,
@@ -85,7 +120,7 @@ final class LiveCompositorRenderer: @unchecked Sendable {
                     .composited(over: image)
                 }
                 image = fill(
-                    CIImage(cvPixelBuffer: cameraBuffer),
+                    cameraFrame.image,
                     into: placement.targetRect,
                     sourceCrop: { placement.videoPlacement.sourceCropRectangle(sourceExtent: $0) },
                     contentMode: placement.videoPlacement.contentMode,
@@ -96,7 +131,12 @@ final class LiveCompositorRenderer: @unchecked Sendable {
             }
         }
 
-        ciContext.render(image, to: outputBuffer, bounds: canvasRect, colorSpace: CGColorSpaceCreateDeviceRGB())
+        ciContext.render(
+            image,
+            to: request.outputBuffer,
+            bounds: canvasRect,
+            colorSpace: CGColorSpaceCreateDeviceRGB()
+        )
         return true
     }
 
@@ -104,9 +144,9 @@ final class LiveCompositorRenderer: @unchecked Sendable {
         cachedBackground = nil
     }
 
-    private func sourceAspectRatio(for pixelBuffer: CVPixelBuffer) -> CGFloat {
-        let width = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
-        let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+    private func sourceAspectRatio(for image: CIImage) -> CGFloat {
+        let width = image.extent.width
+        let height = image.extent.height
         guard width > 0, height > 0 else { return SceneLayout.cameraAspectRatio }
         return width / height
     }
@@ -221,7 +261,7 @@ final class LiveCompositorRenderer: @unchecked Sendable {
         let shadowRect = target.insetBy(dx: -spread, dy: -spread)
         filter.setValue(CIVector(cgRect: target), forKey: "inputExtent")
         filter.setValue(max(0, cornerRadius), forKey: "inputRadius")
-        filter.setValue(CIColor(red: 0, green: 0, blue: 0, alpha: 0.36), forKey: "inputColor")
+        filter.setValue(CIColor(red: 0, green: 0, blue: 0, alpha: 0.38), forKey: "inputColor")
         let blurredShadow = (filter.outputImage ?? CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0)).cropped(to: target))
             .cropped(to: shadowRect)
             .applyingFilter("CIGaussianBlur", parameters: ["inputRadius": 18])

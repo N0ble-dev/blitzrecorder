@@ -8,12 +8,39 @@ struct TargetWindowFittingPlan: Equatable {
 }
 
 enum TargetWindowFitting {
+    static func sourceAspectRatio(for settings: RecordingSettings) -> CGFloat {
+        let canvas = CGRect(
+            x: 0,
+            y: 0,
+            width: settings.layout.aspectRatio,
+            height: 1
+        )
+        let slot = SceneSlotGeometry.targetWindowSlot(
+            in: settings.sceneLayout,
+            enabledSources: settings.enabledSources
+        )
+        let frame = SceneLayoutProjection.padded(
+            SceneLayoutProjection.denormalized(
+                slot,
+                in: canvas,
+                origin: .lowerLeft
+            ),
+            in: canvas,
+            padding: settings.canvasPadding
+        )
+        guard frame.width > 0, frame.height > 0 else {
+            return settings.layout.aspectRatio
+        }
+        return frame.width / frame.height
+    }
+
     static func plan(
         screenFrame: CGRect,
         visibleFrame: CGRect,
         captureLayout: CaptureLayout,
         sceneLayout: SceneLayout,
         enabledSources: Set<CaptureSource>,
+        canvasPadding: CGFloat = 0,
         zoom: CGFloat = 1
     ) -> TargetWindowFittingPlan {
         plan(
@@ -24,6 +51,7 @@ enum TargetWindowFitting {
                 in: sceneLayout,
                 enabledSources: enabledSources
             ),
+            canvasPadding: canvasPadding,
             zoom: zoom
         )
     }
@@ -33,19 +61,25 @@ enum TargetWindowFitting {
         visibleFrame: CGRect,
         captureLayout: CaptureLayout,
         screenSlot: CGRect,
+        canvasPadding: CGFloat = 0,
         zoom: CGFloat = 1
     ) -> TargetWindowFittingPlan {
         let canvasFrame = SceneSlotGeometry.canvasFrame(
             in: visibleFrame,
             captureLayout: captureLayout
         )
-        let unscaledFrame = SceneLayoutProjection.denormalized(
-            screenSlot,
+        let unscaledFrame = SceneLayoutProjection.padded(
+            SceneLayoutProjection.denormalized(
+                screenSlot,
+                in: canvasFrame,
+                origin: .lowerLeft
+            ),
             in: canvasFrame,
-            origin: .lowerLeft
+            padding: canvasPadding
         )
+        let fittedFrame = ScreenWindowFramingPolicy.compactedPhysicalFrame(unscaledFrame)
         let windowFrame = clamped(
-            frame: WindowZoomGeometry.sourceFrame(for: unscaledFrame, zoom: zoom),
+            frame: WindowZoomGeometry.sourceFrame(for: fittedFrame, zoom: zoom),
             in: visibleFrame
         )
         return TargetWindowFittingPlan(

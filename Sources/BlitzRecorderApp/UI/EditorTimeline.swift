@@ -819,6 +819,7 @@ enum EditorSceneTitle {
             screenCropPosition: snapshot.screenCropPosition.map {
                 CGPoint(x: CGFloat($0.x), y: CGFloat($0.y))
             } ?? .zero,
+            screenContentMode: snapshot.screenContentMode.flatMap(CameraContentMode.init(rawValue:)) ?? .fill,
             cameraContentMode: CameraContentMode(rawValue: snapshot.cameraContentMode) ?? .fill,
             sourceOpacities: sourceOpacities
         )

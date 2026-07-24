@@ -1136,22 +1136,7 @@ private struct SceneWorkspaceInspector: View {
     private var sourceFramingControls: some View {
         switch vm.selectedSource?.source ?? .screen {
         case .screen:
-            VStack(alignment: .leading, spacing: 10) {
-                inspectorSectionTitle("Capture area")
-                screenCaptureModeButtons
-
-                inspectorSectionTitle("Framing")
-                HStack(spacing: 8) {
-                    inspectorTextAction("Fit") {
-                        vm.fitSelectedLayer()
-                    }
-                    .disabled(!vm.canEditScene)
-                    inspectorTextAction("Crop") {
-                        vm.beginScreenCropMode()
-                    }
-                    .disabled(!vm.canEditScene || !vm.isSourceConfigured(.screen))
-                }
-            }
+            EmptyView()
         case .camera:
             VStack(alignment: .leading, spacing: 10) {
                 inspectorSectionTitle("Framing")
@@ -1315,9 +1300,10 @@ private struct SceneWorkspaceInspector: View {
             }
 
             BlitzSourcePicker(model: screenSourcePickerModel)
-            .help("Choose the app, window, or display to record")
+            .help("Choose the display or window to record")
 
             screenCaptureModeButtons
+            ScreenContentModeControl(vm: vm, enabled: vm.isSourceConfigured(.screen))
 
             if vm.screenCaptureAreaSelection == .activeWindow {
                 if !vm.hasAccessibilityAccessForWindowControls {
@@ -1371,7 +1357,7 @@ private struct SceneWorkspaceInspector: View {
     private var screenWindowZoomControl: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Text("Window fit")
+                Text("UI scale")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.58))
                 Spacer(minLength: 0)
@@ -1387,16 +1373,18 @@ private struct SceneWorkspaceInspector: View {
                         get: { Double(vm.targetWindowZoom) },
                         set: { vm.setTargetWindowZoom(CGFloat($0)) }
                     ),
-                    in: WindowZoomGeometry.minimumZoom...WindowZoomGeometry.maximumZoom,
+                    in: ScreenSourceZoomGeometry.minimumZoom...ScreenSourceZoomGeometry.maximumZoom,
                     step: 0.05,
                     onEditingChanged: { editing in
-                        if !editing { vm.fitCurrentScreenWindowToSlot() }
+                        if !editing {
+                            vm.applyTargetWindowZoom()
+                        }
                     }
                 )
                 .controlSize(.small)
                 .tint(BlitzUI.mint)
                 .disabled(!vm.canAdjustScreenCapture)
-                .help("Resize the selected source window around its canvas frame")
+                .help("Shrink the source window so its complete UI appears larger in the frame")
 
                 windowSizeStepButton(icon: "arrow.counterclockwise", isDisabled: abs(vm.targetWindowZoom - 1) < 0.001) {
                     vm.resetTargetWindowZoom()
@@ -1405,21 +1393,19 @@ private struct SceneWorkspaceInspector: View {
             }
 
             HStack {
-                Text("50%")
+                Text("100%")
                 Spacer(minLength: 0)
-                Text("150%")
+                Text("200%")
             }
             .font(.system(size: 9, weight: .medium, design: .monospaced))
             .monospacedDigit()
             .foregroundStyle(.white.opacity(0.4))
 
-            workspaceAction("Resize window", icon: "rectangle.arrowtriangle.2.inward") {
+            workspaceAction("Fit full source window", icon: "rectangle.arrowtriangle.2.inward") {
                 vm.fitCurrentScreenWindowToSlot()
             }
             .disabled(!vm.canAdjustScreenCapture)
-            .help("Fit the selected app or window to its canvas frame")
-
-            appContentZoomControl
+            .help("Keep the source window's full width and height visible")
         }
     }
 
@@ -1511,29 +1497,23 @@ private struct SceneWorkspaceInspector: View {
     }
 
     private var screenSourcePickerModel: BlitzSourcePickerModel {
-        let actions = vm.shouldShowAppWindowSourcePermissionHint
-            ? [BlitzSourcePickerItem(
-                title: "Enable Screen Recording",
-                subtitle: "Required to detect apps and windows",
-                systemImage: "lock.open",
-                icon: nil,
-                thumbnail: nil,
-                isSelected: false
-            ) {
-                vm.applyScreenRecordingPermission()
-            }]
-            : []
+        let actions = [BlitzSourcePickerItem(
+            title: "Choose Display or Window",
+            subtitle: "Uses the private macOS picker",
+            systemImage: "rectangle.dashed",
+            icon: nil,
+            thumbnail: nil,
+            isSelected: vm.hasActiveScreenPickerSelection
+        ) {
+            vm.pickScreen()
+        }]
 
         return BlitzSourcePickerModel(
             title: vm.selectedScreenSourceDisplayName,
             subtitle: selectedScreenSourceKindLabel,
             systemImage: screenSourceIcon,
             icon: selectedScreenSourceOption?.icon,
-            sections: [
-                screenSourcePickerSection((kind: .application, title: "Apps")),
-                screenSourcePickerSection((kind: .window, title: "Windows")),
-                screenSourcePickerSection((kind: .display, title: "Displays"))
-            ],
+            sections: [],
             actions: actions,
             layout: .thumbnails,
             enabled: vm.canAdjustScreenCapture
@@ -1563,6 +1543,9 @@ private struct SceneWorkspaceInspector: View {
     }
 
     private var selectedScreenSourceKindLabel: String {
+        if !vm.hasActiveScreenPickerSelection {
+            return "Picker selection required"
+        }
         switch vm.settings.screenSourceBinding?.kind {
         case .application:
             return "App window capture"

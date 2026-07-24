@@ -66,7 +66,7 @@ struct TranscriptDetailView: View {
             Button {
                 copyTranscript()
             } label: {
-                Label("Copy", systemImage: "doc.on.doc")
+                Label("Copy Markdown", systemImage: "doc.on.doc")
                     .frame(minHeight: 40)
             }
 
@@ -391,7 +391,7 @@ struct TranscriptDetailView: View {
     private func copyTranscript() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(
-            transcript.formattedText,
+            transcript.markdownText,
             forType: .string
         )
     }

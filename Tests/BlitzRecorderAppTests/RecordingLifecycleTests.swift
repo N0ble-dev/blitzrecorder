@@ -1899,6 +1899,7 @@ final class RecordingLifecycleTests: XCTestCase {
         settings.enabledSources = [.screen]
         settings.sceneLayout = SceneLayout.presetLayout(.screenFullscreen, for: .vertical)
         settings.canvasPadding = 0.12
+        settings.screenContentMode = .fit
         settings.canvasBackgroundStyle = .ocean
         settings.framesPerSecond = 30
         settings.outputResolution = .p720
@@ -2072,6 +2073,7 @@ final class RecordingLifecycleTests: XCTestCase {
         settings.enabledSources = [.screen]
         settings.sceneLayout = SceneLayout.presetLayout(.screenFullscreen, for: .vertical)
         settings.canvasPadding = 0.12
+        settings.screenContentMode = .fit
         settings.canvasBackgroundStyle = .ocean
         settings.framesPerSecond = 30
         settings.outputResolution = .p720
@@ -2135,6 +2137,12 @@ final class RecordingLifecycleTests: XCTestCase {
         )
 
         let outputURL = try await Merger.exportFinalVideo(take: take, settings: settings)
+        var settingsWithoutShadow = settings
+        settingsWithoutShadow.screenShadowEnabled = false
+        let outputWithoutShadowURL = try await Merger.exportFinalVideo(
+            take: take,
+            settings: settingsWithoutShadow
+        )
         let dimensions = settings.outputResolution.dimensions(for: settings.layout)
         let renderSize = CGSize(width: dimensions.width, height: dimensions.height)
         let geometry = SceneRenderGeometry(
@@ -2143,20 +2151,37 @@ final class RecordingLifecycleTests: XCTestCase {
             origin: .upperLeft
         )
         let sourceRect = geometry.visibleSourceRect(for: .screen, sourceAspectRatio: 1)
+        let shadowPoints = [
+            CGPoint(x: sourceRect.midX, y: sourceRect.maxY + 8),
+            CGPoint(x: sourceRect.maxX + 8, y: sourceRect.midY),
+            CGPoint(x: sourceRect.midX, y: sourceRect.minY - 8),
+            CGPoint(x: sourceRect.minX - 8, y: sourceRect.midY)
+        ]
+        .map { point in
+            CGPoint(
+                x: point.x / renderSize.width,
+                y: point.y / renderSize.height
+            )
+        }
         let sampledColors = try await samplePixelColors(
             in: outputURL,
-            normalizedPoints: [
-                CGPoint(x: (sourceRect.maxX + 8) / renderSize.width, y: sourceRect.midY / renderSize.height),
-                CGPoint(x: 0.95, y: sourceRect.midY / renderSize.height)
-            ],
+            normalizedPoints: shadowPoints,
+            at: CMTime(seconds: 0.1, preferredTimescale: 600)
+        )
+        let sampledColorsWithoutShadow = try await samplePixelColors(
+            in: outputWithoutShadowURL,
+            normalizedPoints: shadowPoints,
             at: CMTime(seconds: 0.1, preferredTimescale: 600)
         )
 
-        let shadowEdge = sampledColors[0]
-        let clearBackground = sampledColors[1]
-        XCTAssertLessThan(shadowEdge.red, clearBackground.red)
-        XCTAssertLessThan(shadowEdge.green, clearBackground.green)
-        XCTAssertLessThan(shadowEdge.blue, clearBackground.blue)
+        let shadowDarkensBackground = zip(sampledColors, sampledColorsWithoutShadow).contains {
+            shadowEdge,
+            clearBackground in
+            shadowEdge.red < clearBackground.red
+                && shadowEdge.green < clearBackground.green
+                && shadowEdge.blue < clearBackground.blue
+        }
+        XCTAssertTrue(shadowDarkensBackground)
     }
 
     func testMergerRendersCameraShadowOverScreenInFinalExport() async throws {
@@ -2516,6 +2541,44 @@ final class RecordingLifecycleTests: XCTestCase {
         let audioTracks = try await asset.loadTracks(withMediaType: .audio)
 
         XCTAssertEqual(audioTracks.count, 1)
+    }
+
+    func testMergerLoopsOptionalBackgroundMusicAcrossExport() async throws {
+        var settings = RecordingSettings()
+        settings.outputDirectory = temporaryDirectory()
+        settings.enabledSources = [.screen]
+        settings.framesPerSecond = 30
+        settings.outputResolution = .p720
+
+        let store = TakeFileStore()
+        let take = try store.createTake(settings: settings)
+        try FileManager.default.createDirectory(
+            at: take.scratchDirectory,
+            withIntermediateDirectories: true
+        )
+        try writeTestMovie(
+            url: take.screenURL,
+            codec: .h264,
+            color: (blue: 255, green: 0, red: 0, alpha: 255),
+            frameCount: 45
+        )
+        let musicURL = take.scratchDirectory.appendingPathComponent("music.m4a")
+        try writeSilentAudioFile(url: musicURL)
+
+        let outputURL = try await Merger.exportFinalVideo(FinalVideoExportRequest(
+            take: take,
+            settings: settings,
+            sceneEvents: [],
+            backgroundMusic: ExportBackgroundMusic(url: musicURL, volume: 0.18),
+            destinationURL: nil,
+            progressHandler: nil
+        ))
+        let asset = AVURLAsset(url: outputURL)
+        let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+        let audioDuration = try await XCTUnwrap(audioTracks.first).load(.timeRange).duration
+
+        XCTAssertEqual(audioTracks.count, 1)
+        XCTAssertEqual(audioDuration.seconds, 1.5, accuracy: 0.08)
     }
 
     func testMergerFailsWhenMicrophoneIsEnabledButAudioSidecarIsMissing() async throws {

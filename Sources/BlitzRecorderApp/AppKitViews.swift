@@ -213,6 +213,14 @@ final class PreviewStageView: NSView {
         }
     }
 
+    var screenContentMode: CameraContentMode = .fill {
+        didSet {
+            if !canvasFrame.isEmpty {
+                applySceneFrames()
+            }
+        }
+    }
+
     var cameraContentMode: CameraContentMode = .fill {
         didSet {
             cameraPreview.contentMode = cameraContentMode.renderContentMode
@@ -946,6 +954,14 @@ final class PreviewStageView: NSView {
 
     private func projectedFrame(for layer: SceneLayerKind, in canvas: NSRect) -> NSRect {
         let geometry = renderGeometry(in: canvas)
+        if layer == .screen,
+           screenContentMode == .fit,
+           !isScreenCropEditingEnabled {
+            return geometry.sourceFrame(
+                for: .screen,
+                sourceAspectRatio: screenSourceAspectRatio
+            )
+        }
         guard layer == .camera,
               cameraContentMode == .fit,
               !isCameraCropEditingEnabled else {
@@ -974,6 +990,7 @@ final class PreviewStageView: NSView {
                 cameraCropPosition: cameraCropPosition,
                 canvasBackgroundStyle: canvasBackgroundStyle,
                 canvasPadding: canvasPadding,
+                screenContentMode: screenContentMode,
                 cameraContentMode: cameraContentMode,
                 cameraFramePadding: cameraFramePadding,
                 cameraShadowEnabled: cameraShadowEnabled

@@ -32,16 +32,25 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     }
 
     func start(url: URL, settings: RecordingSettings, timelineStartTime: CMTime? = nil) async throws {
+        try await start(SystemAudioCaptureStartRequest(
+            url: url,
+            settings: settings,
+            pickedScreenFilter: nil,
+            timelineStartTime: timelineStartTime
+        ))
+    }
+
+    func start(_ request: SystemAudioCaptureStartRequest) async throws {
         streamError = nil
         intentionallyStoppedStream = nil
-        self.timelineStartTime = timelineStartTime
+        self.timelineStartTime = request.timelineStartTime
         firstSampleTime = nil
         hasProducedStartupSample = false
         let writer = try AudioSampleFileWriter(
-            url: url,
-            timelineStartTime: timelineStartTime,
-            stereoBitrate: settings.finalAudioBitrate,
-            format: settings.effectiveSourceAudioFormat
+            url: request.url,
+            timelineStartTime: request.timelineStartTime,
+            stereoBitrate: request.settings.finalAudioBitrate,
+            format: request.settings.effectiveSourceAudioFormat
         )
         writer.onFirstSampleWritten = { [weak self] in
             self?.queue.async {
@@ -55,7 +64,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
         }
         self.writer = writer
 
-        let filter = try await SystemAudioStreamConfiguration.contentFilter(settings: settings)
+        let filter = try SystemAudioStreamConfiguration.contentFilter(request.pickedScreenFilter)
         let configuration = SystemAudioStreamConfiguration.configuration(streamName: "BlitzRecorder System Audio")
         let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
         try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
